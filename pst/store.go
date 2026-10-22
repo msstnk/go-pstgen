@@ -128,6 +128,18 @@ func joinNames(ps []Person) string {
 	return strings.Join(n, "; ")
 }
 
+// oneOffEntryID builds a one-off EntryID (MS-OXCDATA 2.2.5.1) so Outlook can show the SMTP address.
+func oneOffEntryID(p Person) []byte {
+	b := []byte{0, 0, 0, 0,
+		0x81, 0x2B, 0x1F, 0xA4, 0xBE, 0xA3, 0x10, 0x19, 0x9D, 0x6E, 0x00, 0xDD, 0x01, 0x0F, 0x54, 0x02,
+		0x00, 0x00, 0x00, 0x80}
+	b = append(b, UTF16LE(p.Name+"\x00")...)
+	b = append(b, UTF16LE("SMTP\x00")...)
+	return append(b, UTF16LE(p.Addr+"\x00")...)
+}
+
+func searchKey(p Person) []byte { return []byte("SMTP:" + strings.ToUpper(p.Addr) + "\x00") }
+
 func i32(v int32) []byte {
 	b := make([]byte, 4)
 	le.PutUint32(b, uint32(v))
@@ -165,6 +177,7 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 		rrows = append(rrows, Row{ID: uint32(i + 1), Cells: []Cell{
 			cell(0x0C15, i32(typ)), cell(0x0E0F, bl(true)), cell(0x0FFE, i32(6)), cell(0x3001, UTF16LE(p.Name)),
 			cell(0x3002, UTF16LE("SMTP")), cell(0x3003, UTF16LE(p.Addr)), cell(0x3900, i32(0)),
+			cell(0x0FFF, oneOffEntryID(p)), cell(0x300B, searchKey(p)), cell(0x0FF9, searchKey(p)),
 			cell(0x39FF, UTF16LE(p.Name)), cell(0x3A40, bl(false)),
 		}})
 	}
@@ -209,6 +222,8 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 		PStr(0x0042, m.Sender.Name), PStr(0x0064, "SMTP"), PStr(0x0065, m.Sender.Addr),
 		PStr(0x0070, m.Subject), PStr(0x007D, m.Headers),
 		PStr(0x0C1A, m.Sender.Name), PStr(0x0C1E, "SMTP"), PStr(0x0C1F, m.Sender.Addr),
+		PBin(0x0041, oneOffEntryID(m.Sender)), PBin(0x003B, searchKey(m.Sender)),
+		PBin(0x0C19, oneOffEntryID(m.Sender)), PBin(0x0C1D, searchKey(m.Sender)),
 		PStr(0x0E03, ccS), PStr(0x0E04, toS), PTime(0x0E06, dlv),
 		PInt32(0x0E07, flags), PInt32(0x0E08, size), PInt32(0x0E17, 0), PBool(0x0E1B, hasAttach),
 		PStr(0x0E1D, m.Subject), PStr(0x1000, m.Body), PStr(0x1035, m.MessageID),
