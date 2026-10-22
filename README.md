@@ -6,7 +6,7 @@ So your company just acquired another company, and you're scheduled to receive a
 
 **What it does**
 
-`go-pstgen` generates dummy PST files from the [MS-PST] spec, and that's about all it does. The text is gibberish, but the sizes, folders and structure look like the real thing. Feed it a config, hit run, and a pile of fake mail pours out at around 1.4 GiB/s.
+`go-pstgen` generates dummy PST files from the [MS-PST] spec, and that's about all it does. The text is gibberish, but the sizes, folders and structure look like the real thing. Feed it a config, hit run, and a pile of fake mail pours out at over 1 GiB/s.
 
 **Who it's for**
 
@@ -242,12 +242,25 @@ Here's what generating 100 mailboxes took, with a mean of 100 MB, a standard dev
 | Throughput | about 1.4 GiB/s |
 | Peak memory usage (RSS) | about 190 MB |
 
-## Directory layout
+## FAQ
 
-- `cmd/go-pstgen/` — command-line entry point
-- `internal/config/` — `config.json` loading and validation
-- `internal/gen/` — message planning, text generation and the worker pool
-- `pst/` — PST (NDB/LTP) writer library
+**Q: The seller refuses to disclose their mailbox sizes. How do I set `mailbox_mean_mb`?**  
+A: When the seller treats basic storage statistics like classified intelligence, look up their license tier. Exchange Online Plan 1 caps mailboxes at 50 GB; Plan 2, E3, and E5 cap them at 100 GB. Users treat storage limits as targets. Plug in a pessimistic baseline like `20000` (20 GB) or `40000` (40 GB), set `"mailbox_log_variance": 1.2` for the hoarders who never empty Deleted Items, and hand the resulting projected timeline to your PMO.
+
+**Q: The PMO insists the cutover window is strictly 12 hours. Can `go-pstgen` help?**  
+A: `go-pstgen` can produce files at over 1 GiB/s, but it cannot alter target-tenant throttling, your outbound internet pipe, or the laws of physics. Its primary function is providing the math that proves 12 hours is impossible on a Tuesday afternoon, rather than discovering it at 3:00 AM on Sunday during the cutover call.
+
+**Q: Our migration vendor claims their tool handles 500 GB per hour. Should I trust that?**  
+A: Vendors measure throughput in isolated lab environments with sequential, pristine files and zero API throttling. Populate `config.json` to generate 30 GiB PSTs for 100 mailboxes packed with 150 KiB messages, run an actual benchmark, and invite their account executive to watch the live throughput graph with you.
+
+**Q: Why not request sanitized, real PST samples from the seller?**  
+A: You can ask, but unless your M&A team somehow negotiated a clause in the SPA forcing their engineers to scrub production mailboxes for a pre-Day 1 test, they will never do this. Your best hope is that the seller's engineers also found `go-pstgen` and quietly run it on their end to get you off their back.
+
+**Q: Can I use this to test edge cases in our migration tool?**  
+A: No. `go-pstgen` is built strictly for throughput benchmarking and API concurrency testing. It does not simulate corrupt PST structures, duplicate Message-IDs, malformed MIME parts, or nested calendar exceptions. Those delightful edge cases will remain safely hidden until 3:00 AM on cutover night, exactly as you anticipated.
+
+**Q: The email bodies are gibberish. Will our import tool reject them?**  
+A: No. Import tools parse byte counts, headers, and folder nodes, not literary prose. The binary structure adheres strictly to the MS-PST specification: valid UTF-16 encoding, legitimate MIME headers, and compliant node trees. Your migration tool will ingest them happily, and your DLP scanners will find absolutely nothing to report—unless the infinite monkey theorem kicks in and accidentally types out next quarter's board slides.
 
 ## License
 
