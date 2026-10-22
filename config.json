@@ -1,0 +1,10 @@
+{
+  "output_dir": "./output",
+  "mailboxes": ["user01@example.com"],
+  "mailbox_mean_mb": 1000,
+  "mailbox_stddev_mb": 200,
+  "split_size_mb": 1000,
+  "attachment_ratio": 0.15,
+  "seed": null,
+  "crypt_method": "permute"
+}

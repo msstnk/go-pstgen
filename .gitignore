@@ -1,0 +1,28 @@
+# Build artifacts
+/bin/
+
+# Generated PST output (output_dir in config.json)
+/output/
+
+# All PST files (including reference ref/*.pst; excluded because of their size)
+*.pst
+ref/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Go
+*.test
+*.out
+coverage.*
+
+# OS / editors
+*:Zone.Identifier
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
