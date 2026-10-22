@@ -1,7 +1,7 @@
 package main
 
 // version is the release version of go-pstgen (tag releases as v<version>).
-const version = "v0.1.1"
+const version = "v0.1.2"
 
 const credit = `go-pstgen ` + version + ` - dummy PST file generator
 Copyright (c) 2026 msstnk. Released under the MIT License.
