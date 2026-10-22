@@ -2,6 +2,7 @@ package gen
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -171,8 +172,8 @@ func Run(cfg config.Config) error {
 	jobs := make([]job, len(cfg.Mailboxes))
 	for i, u := range cfg.Mailboxes {
 		mean := cfg.MailboxMeanMB * 1024 * 1024
-		t := master.NormFloat64()*cfg.MailboxStddevMB*1024*1024 + mean
-		j := job{user: u, seed: master.Int63(), target: int64(max(t, max(mean*0.1, 1024*1024)))}
+		t := sampleMailboxSize(master, cfg)
+		j := job{user: u, seed: master.Int63(), target: clampMailboxSize(t, mean)}
 		// No random draw when the ratio is 1 so existing seeded output is unchanged
 		j.legalHolds = cfg.LegalHoldsRatio >= 1 || master.Float64() < cfg.LegalHoldsRatio
 		jobs[i] = j
@@ -209,4 +210,21 @@ func Run(cfg config.Config) error {
 		return fmt.Errorf("%d of %d mailboxes failed", len(jobs)-completed, len(jobs))
 	}
 	return nil
+}
+
+// sampleMailboxSize draws a target mailbox size in bytes: normal by default, or log-normal
+// (long right tail, same mean) when mailbox_log_variance is set.
+func sampleMailboxSize(rng *rand.Rand, cfg config.Config) float64 {
+	mean := cfg.MailboxMeanMB * 1024 * 1024
+	z := rng.NormFloat64()
+	if cfg.MailboxLogVariance == nil {
+		return z*cfg.MailboxStddevMB*1024*1024 + mean
+	}
+	v := *cfg.MailboxLogVariance
+	return math.Exp(math.Log(mean) - v/2 + math.Sqrt(v)*z)
+}
+
+// clampMailboxSize limits a sampled size to [max(10% of mean, 1 MB), 10 x mean] and returns bytes.
+func clampMailboxSize(t, mean float64) int64 {
+	return int64(min(max(t, max(mean*0.1, 1024*1024)), mean*10))
 }

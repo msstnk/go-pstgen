@@ -18,19 +18,21 @@ type Config struct {
 	Mailboxes       []string `json:"mailboxes"`
 	MailboxMeanMB   float64  `json:"mailbox_mean_mb"`
 	MailboxStddevMB float64  `json:"mailbox_stddev_mb"`
-	Workers         int      `json:"workers"`
-	TotalMessages   int      `json:"total_messages"`
-	MinSizeKB       int      `json:"min_size_kb"`
-	MaxSizeKB       int      `json:"max_size_kb"`
-	MeanSizeKB      int      `json:"mean_size_kb"`
-	LogVariance     float64  `json:"log_variance"`
-	AttachmentRatio float64  `json:"attachment_ratio"`
-	Seed            *int64   `json:"seed"`
-	CryptMethod     string   `json:"crypt_method"`      // none / permute (default) / cyclic
-	SplitSizeMB     float64  `json:"split_size_mb"`     // values <= 0 disable splitting
-	LegalHoldsRatio float64  `json:"legal_holds_ratio"` // fraction of mailboxes that have a Legal Holds folder
-	EndDate         string   `json:"end_date"`          // latest message date: RFC 3339 or YYYY-MM-DD (end of that day, UTC); empty = run time
-	RangeDays       int      `json:"range_days"`        // messages are dated within this many days before end_date
+	// MailboxLogVariance, when set, makes mailbox sizes log-normal with this log variance and mailbox_stddev_mb is ignored; nil = normal distribution
+	MailboxLogVariance *float64 `json:"mailbox_log_variance"`
+	Workers            int      `json:"workers"`
+	TotalMessages      int      `json:"total_messages"`
+	MinSizeKB          int      `json:"min_size_kb"`
+	MaxSizeKB          int      `json:"max_size_kb"`
+	MeanSizeKB         int      `json:"mean_size_kb"`
+	LogVariance        float64  `json:"log_variance"`
+	AttachmentRatio    float64  `json:"attachment_ratio"`
+	Seed               *int64   `json:"seed"`
+	CryptMethod        string   `json:"crypt_method"`      // none / permute (default) / cyclic
+	SplitSizeMB        float64  `json:"split_size_mb"`     // values <= 0 disable splitting
+	LegalHoldsRatio    float64  `json:"legal_holds_ratio"` // fraction of mailboxes that have a Legal Holds folder
+	EndDate            string   `json:"end_date"`          // latest message date: RFC 3339 or YYYY-MM-DD (end of that day, UTC); empty = run time
+	RangeDays          int      `json:"range_days"`        // messages are dated within this many days before end_date
 
 	Crypt pst.CryptMethod `json:"-"`
 	End   time.Time       `json:"-"`
@@ -64,6 +66,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.MinSizeKB < 1 || cfg.MaxSizeKB < cfg.MinSizeKB {
 		return cfg, fmt.Errorf("invalid min_size_kb/max_size_kb")
+	}
+	if cfg.MailboxLogVariance != nil && *cfg.MailboxLogVariance <= 0 {
+		return cfg, fmt.Errorf("invalid mailbox_log_variance (must be greater than 0)")
 	}
 	if cfg.LegalHoldsRatio < 0 || cfg.LegalHoldsRatio > 1 {
 		return cfg, fmt.Errorf("invalid legal_holds_ratio (must be between 0 and 1)")

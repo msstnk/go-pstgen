@@ -2,24 +2,24 @@
 
 **Motivation**
 
-So your company just acquired another company, and a mountain of PST files are about to be handed to you. You have to figure out how long the importing process will take, and you want to do it before the cutover weekend. We've all been there, right?
+So your company just acquired another company, and you're scheduled to receive a mountain of PST files right before Day 1. You have to figure out how long the import will take, and you need to know before the cutover weekend. We've all been there, right?
 
 **What it does**
 
-`go-pstgen` generates dummy PST files from the [MS-PST] spec, and that's about all it does. The text is gibberish, but the sizes, folders and structure look like the real thing. Write a config, run it, and a pile of fake mail comes out at around 1.4 GiB/s.
+`go-pstgen` generates dummy PST files from the [MS-PST] spec, and that's about all it does. The text is gibberish, but the sizes, folders and structure look like the real thing. Feed it a config, hit run, and a pile of fake mail pours out at around 1.4 GiB/s.
 
 **Who it's for**
 
 - You need TB-class migration data to test an import, and you need it soon.
 - You don't want to build the PST files by hand.
-- You don't want real mailbox data anywhere near a test.
+- You don't want real mailbox data anywhere near a test run.
 - You want to know how many hours per TB the import takes before the cutover meeting, not during it.
 
 **Features**
 
 - Pure Go, no CGO. One binary for Linux and one for Windows.
 - Purview-style folders: `Inbox`, `Sent Items`, `Deleted Items`, `Recoverable Items` and `Legal Holds`.
-- Mailbox sizes follow a normal distribution and message sizes a log-normal one, with optional attachments.
+- Mailbox sizes follow a normal (or log-normal) distribution and message sizes a log-normal one, with optional attachments.
 - Files are split into `<UPN>.pst`, `<UPN>-2.pst`, ... when they get too big.
 - Parallel workers, so 100 mailboxes finish in seconds.
 - Set a `seed` and you get the same output every time.
@@ -28,17 +28,21 @@ So your company just acquired another company, and a mountain of PST files are a
 
 ---
 
-## Build
+## Install
 
-All you need is Go. No CGO, so the build is one line per platform.
-
-Want to skip cloning? Install it straight from GitHub:
+All you need is Go. No CGO. Install straight from GitHub, no clone required:
 
 ```sh
 go install github.com/msstnk/go-pstgen/cmd/go-pstgen@latest
 ```
 
-The binary lands in `$(go env GOPATH)/bin` (or `$GOBIN` if set). Or build from a clone:
+The binary lands in `$(go env GOPATH)/bin` (or `$GOBIN` if set).
+
+`go install` ships only the binary, so there is no `config.json` to go with it. Create your own by hand (see [config.json](#configjson)) and point `--config` at it. Leave out any key you don't need; the defaults apply.
+
+## Build
+
+Or build from a clone, one line per platform:
 
 ```sh
 # Linux
@@ -47,9 +51,30 @@ CGO_ENABLED=0 go build -o bin/go-pstgen ./cmd/go-pstgen
 GOOS=windows CGO_ENABLED=0 go build -o bin/go-pstgen.exe ./cmd/go-pstgen
 ```
 
+## Place config.json
+
+Create a `config.json` file in current directory, or anywhere you like, and point `--config` at it when running `go-pstgen`.
+
+Most runs only need a few keys. For 24 mailboxes of about 100 MB on 8 cores (write all 24 UPNs out in your real file; the `"..."` here is just shorthand):
+
+```json
+{
+  "mailboxes": [
+    "user01@example.com",
+    ...
+    "user24@example.com"
+  ],
+  "mailbox_mean_mb": 100,
+  "mailbox_stddev_mb": 20,
+  "workers": 8
+}
+```
+
+Details on all available keys are in the [config.json](#configjson) section below.
+
 ## Run
 
-`--config config.json` is the default, so you can leave it out.
+It defaults to `--config config.json`, so you can omit the flag.
 ```sh
 bin/go-pstgen --config config.json
 ```
@@ -62,8 +87,9 @@ Leave a key out and you get the default from the table below. A key that doesn't
 |---|---|---|
 | `output_dir` | `"./output"` | Output directory. Files are written flat as `<output_dir>/<UPN>.pst` (`<UPN>-2.pst`, `<UPN>-3.pst` ... when split) |
 | `mailboxes` | `["user01@example.com"]` | List of UPNs of the mailboxes to generate (empty is an error) |
-| `mailbox_mean_mb` | `1000` | Mean mailbox size (normal distribution) in MB. A sampled size is never below the larger of 10% of the mean and 1 MB |
-| `mailbox_stddev_mb` | `200` | Standard deviation of the mailbox size (MB) |
+| `mailbox_mean_mb` | `1000` | Mean mailbox size in MB. A sampled size is clamped to between the larger of 10% of the mean and 1 MB, and 10 times the mean |
+| `mailbox_stddev_mb` | `200` | Standard deviation of the mailbox size (MB). Ignored when `mailbox_log_variance` is set |
+| `mailbox_log_variance` | `null` | If set (greater than 0), mailbox sizes follow a log-normal distribution with this log variance instead of the normal one: a long tail toward large mailboxes while the mean stays `mailbox_mean_mb` (`mailbox_stddev_mb` is ignored). Around `1.0`-`1.3` looks realistic, but the spread of file sizes gets wide, so handle with care. If `null`, the normal distribution is used |
 | `workers` | number of CPUs | Parallelism (values below 1 become 1; capped at the number of mailboxes) |
 | `total_messages` | `0` | Number of messages per mailbox. If 0 or less, messages are generated until the size target is reached |
 | `min_size_kb` | `10` | Minimum size of a message (KB, at least 1) |
@@ -73,7 +99,7 @@ Leave a key out and you get the default from the table below. A key that doesn't
 | `attachment_ratio` | `0.3` | Fraction of messages with an attachment |
 | `seed` | `null` | Random seed. If `null`, the current time is used |
 | `crypt_method` | `"permute"` | PST encryption method: `none` / `permute` / `cyclic` |
-| `legal_holds_ratio` | `1.0` | Fraction of mailboxes (0-1) that have a `Legal Holds` folder. Mailboxes without it get no such folder, and its share of messages is spread over the other folders |
+| `legal_holds_ratio` | `1.0` | Fraction of mailboxes (0.0-1.0) that have a `Legal Holds` folder. Mailboxes without it get no such folder, and its share of messages is spread over the other folders |
 | `end_date` | `""` (run time) | Latest message date. RFC 3339 (`2026-03-31T12:00:00Z`) or `YYYY-MM-DD` (end of that day, UTC). If empty, the run time is used |
 | `range_days` | `365` | Messages are dated uniformly within this many days before `end_date` (at least 1) |
 | `split_size_mb` | `10240` | Maximum size of one PST file (MB). Output moves to the next file once the limit is expected to be exceeded. If 0 or less, files are not split |
@@ -86,6 +112,7 @@ Here's an example with every key set (everything except `mailboxes`, `workers` a
   "mailboxes": ["user01@example.com", "user02@example.com"],
   "mailbox_mean_mb": 1000,
   "mailbox_stddev_mb": 200,
+  "mailbox_log_variance": null,
   "workers": 4,
   "total_messages": 0,
   "min_size_kb": 10,
@@ -106,7 +133,7 @@ Here's an example with every key set (everything except `mailboxes`, `workers` a
 
 ### Example
 
-The words are random and mean nothing. Only the word lengths and letter frequencies are matched to English, so the text looks English-like.
+The text is gibberish, but word lengths and letter frequencies match real English—so at a glance, it looks legitimate.
 
 ```
 Message-ID: <3f9a1c07-5be2-04d1-9e6a-7c21d8f04b3e@contoso.com>
@@ -150,7 +177,7 @@ Each message lands in a random folder according to the weights above, and inside
 
 **Counts and sizes**
 
-- The target size of each mailbox is sampled from the normal distribution given by `mailbox_mean_mb` / `mailbox_stddev_mb`.
+- The target size of each mailbox is sampled from the normal distribution given by `mailbox_mean_mb` / `mailbox_stddev_mb`, or, if `mailbox_log_variance` is set, from a log-normal distribution with mean `mailbox_mean_mb`.
 - Message sizes are sampled from a log-normal distribution with mean `mean_size_kb` and log variance `log_variance`, and clamped to `[min_size_kb, max_size_kb]`.
 - If `total_messages` > 0, exactly that many messages are generated; otherwise messages are generated until the total size reaches the target size.
 - Each message has an attachment with probability `attachment_ratio`.
@@ -190,7 +217,7 @@ Each message lands in a random folder according to the weights above, and inside
 | Importing the generated files in the Outlook for Microsoft 365 client | Verified |
 | Microsoft Purview (PST import) | Not verified yet |
 
-If you try it with a migration tool, results are welcome.
+Tried it with another migration tool? PRs and issue reports are welcome.
 
 ## Benchmark
 

@@ -77,6 +77,8 @@ func TestLoadConfigValidation(t *testing.T) {
 		{"min below 1", `{"min_size_kb":0}`},
 		{"legal holds above 1", `{"legal_holds_ratio":1.5}`},
 		{"legal holds below 0", `{"legal_holds_ratio":-0.1}`},
+		{"log variance zero", `{"mailbox_log_variance":0}`},
+		{"log variance negative", `{"mailbox_log_variance":-0.5}`},
 		{"bad crypt", `{"crypt_method":"rot13"}`},
 	}
 	for _, tt := range tests {
@@ -96,5 +98,20 @@ func TestLoadConfigBOMAndWorkers(t *testing.T) {
 	}
 	if cfg.Workers != 1 {
 		t.Errorf("Workers = %d, want 1", cfg.Workers)
+	}
+}
+
+func TestLoadConfigMailboxLogVariance(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `{}`))
+	if err != nil || cfg.MailboxLogVariance != nil {
+		t.Fatalf("default: err=%v, log variance=%v, want nil", err, cfg.MailboxLogVariance)
+	}
+	cfg, err = Load(writeConfig(t, `{"mailbox_log_variance":null}`))
+	if err != nil || cfg.MailboxLogVariance != nil {
+		t.Fatalf("null: err=%v, log variance=%v, want nil", err, cfg.MailboxLogVariance)
+	}
+	cfg, err = Load(writeConfig(t, `{"mailbox_log_variance":1.2}`))
+	if err != nil || cfg.MailboxLogVariance == nil || *cfg.MailboxLogVariance != 1.2 {
+		t.Fatalf("set: err=%v, log variance=%v, want 1.2", err, cfg.MailboxLogVariance)
 	}
 }
