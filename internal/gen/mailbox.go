@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +23,7 @@ func generate(cfg config.Config, c *corpus, j job) error {
 		return err
 	}
 
-	plan, n, total := planMessages(rng, cfg, j.target, j.legalHolds)
+	plan, n, total := planMessages(rng, cfg, j.target, j.holds)
 	fmt.Printf("%s planned %d messages, ~%d MB\n", tag, n, total/1024/1024)
 
 	var key [16]byte
@@ -47,7 +48,7 @@ func generate(cfg config.Config, c *corpus, j job) error {
 		}
 		folders = map[string]*pst.Folder{}
 		for _, name := range folderNames {
-			if name == "Legal Holds" && !j.legalHolds {
+			if !j.holds && slices.Contains(holdFolders, name) {
 				continue
 			}
 			parent, hasParent := folderParents[name]
@@ -145,10 +146,10 @@ func outPath(cfg config.Config, user string, part int) string {
 }
 
 type job struct {
-	user       string
-	seed       int64
-	target     int64
-	legalHolds bool
+	user   string
+	seed   int64
+	target int64
+	holds  bool
 }
 
 // Run generates every mailbox in cfg using a pool of cfg.Workers workers.
@@ -175,7 +176,7 @@ func Run(cfg config.Config) error {
 		t := sampleMailboxSize(master, cfg)
 		j := job{user: u, seed: master.Int63(), target: clampMailboxSize(t, mean)}
 		// No random draw when the ratio is 1 so existing seeded output is unchanged
-		j.legalHolds = cfg.LegalHoldsRatio >= 1 || master.Float64() < cfg.LegalHoldsRatio
+		j.holds = cfg.HoldsRatio >= 1 || master.Float64() < cfg.HoldsRatio
 		jobs[i] = j
 	}
 	workers := max(1, min(cfg.Workers, len(jobs)))

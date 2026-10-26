@@ -122,11 +122,12 @@ func TestPlanMessagesFolders(t *testing.T) {
 	cfg := config.Default()
 	cfg.TotalMessages = 20000
 	cfg.End = time.Now().UTC()
-	legal := slices.Index(folderNames, "Legal Holds")
 
 	plan, _, _ := planMessages(rand.New(rand.NewSource(1)), cfg, 0, false)
-	if len(plan[legal]) != 0 {
-		t.Errorf("Legal Holds has %d messages, want 0", len(plan[legal]))
+	for _, name := range holdFolders {
+		if n := len(plan[slices.Index(folderNames, name)]); n != 0 {
+			t.Errorf("%s has %d messages without holds, want 0", name, n)
+		}
 	}
 
 	plan, _, _ = planMessages(rand.New(rand.NewSource(1)), cfg, 0, true)
