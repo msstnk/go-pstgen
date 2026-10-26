@@ -28,11 +28,11 @@ type Config struct {
 	LogVariance        float64  `json:"log_variance"`
 	AttachmentRatio    float64  `json:"attachment_ratio"`
 	Seed               *int64   `json:"seed"`
-	CryptMethod        string   `json:"crypt_method"`      // none / permute (default) / cyclic
-	SplitSizeMB        float64  `json:"split_size_mb"`     // values <= 0 disable splitting
-	LegalHoldsRatio    float64  `json:"legal_holds_ratio"` // fraction of mailboxes that have a Legal Holds folder
-	EndDate            string   `json:"end_date"`          // latest message date: RFC 3339 or YYYY-MM-DD (end of that day, UTC); empty = run time
-	RangeDays          int      `json:"range_days"`        // messages are dated within this many days before end_date
+	CryptMethod        string   `json:"crypt_method"`  // none / permute (default) / cyclic
+	SplitSizeMB        float64  `json:"split_size_mb"` // values <= 0 disable splitting
+	HoldsRatio         float64  `json:"holds_ratio"`   // fraction of mailboxes that have the hold folders (Purges, Versions, DiscoveryHolds)
+	EndDate            string   `json:"end_date"`      // latest message date: RFC 3339 or YYYY-MM-DD (end of that day, UTC); empty = run time
+	RangeDays          int      `json:"range_days"`    // messages are dated within this many days before end_date
 
 	Crypt pst.CryptMethod `json:"-"`
 	End   time.Time       `json:"-"`
@@ -44,7 +44,7 @@ func Default() Config {
 		OutputDir: "./output", Mailboxes: []string{"user01@example.com"},
 		MailboxMeanMB: 1000, MailboxStddevMB: 200, Workers: runtime.NumCPU(),
 		MinSizeKB: 10, MaxSizeKB: 10240, MeanSizeKB: 150, LogVariance: 0.5, AttachmentRatio: 0.3,
-		SplitSizeMB: 10240, LegalHoldsRatio: 1.0, RangeDays: 365,
+		SplitSizeMB: 10240, HoldsRatio: 1.0, RangeDays: 365,
 	}
 }
 
@@ -70,8 +70,8 @@ func Load(path string) (Config, error) {
 	if cfg.MailboxLogVariance != nil && *cfg.MailboxLogVariance <= 0 {
 		return cfg, fmt.Errorf("invalid mailbox_log_variance (must be greater than 0)")
 	}
-	if cfg.LegalHoldsRatio < 0 || cfg.LegalHoldsRatio > 1 {
-		return cfg, fmt.Errorf("invalid legal_holds_ratio (must be between 0 and 1)")
+	if cfg.HoldsRatio < 0 || cfg.HoldsRatio > 1 {
+		return cfg, fmt.Errorf("invalid holds_ratio (must be between 0 and 1)")
 	}
 	if cfg.RangeDays < 1 {
 		return cfg, fmt.Errorf("invalid range_days (must be at least 1)")

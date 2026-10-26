@@ -10,13 +10,19 @@ import (
 	"github.com/msstnk/go-pstgen/internal/config"
 )
 
-var folderNames = []string{"Inbox", "Sent Items", "Deleted Items", "Recoverable Items", "Legal Holds"}
+var folderNames = []string{"Inbox", "Sent Items", "Deleted Items", "Recoverable Items", "Deletions", "Purges", "Versions", "DiscoveryHolds"}
+
+// holdFolders exist only in mailboxes with a hold (litigation hold, eDiscovery hold or retention policy) in effect.
+var holdFolders = []string{"Purges", "Versions", "DiscoveryHolds"}
 
 // folderParents maps a folder to its parent's name. Folders not listed are created under the top folder.
 // A parent must appear before its children in folderNames.
-var folderParents = map[string]string{"Legal Holds": "Recoverable Items"}
+var folderParents = map[string]string{
+	"Deletions": "Recoverable Items", "Purges": "Recoverable Items", "Versions": "Recoverable Items", "DiscoveryHolds": "Recoverable Items",
+}
 
-var folderWeights = []int{40, 25, 15, 10, 10}
+// Recoverable Items itself holds no messages in Exchange; its subfolders do.
+var folderWeights = []int{40, 25, 15, 0, 8, 5, 4, 3}
 
 type planned struct {
 	ts        time.Time
@@ -31,10 +37,12 @@ func sampleSize(rng *rand.Rand, cfg config.Config) int {
 }
 
 // planMessages generates metadata only and sorts it by time ascending within each folder.
-func planMessages(rng *rand.Rand, cfg config.Config, target int64, legalHolds bool) ([][]planned, int, int64) {
+func planMessages(rng *rand.Rand, cfg config.Config, target int64, holds bool) ([][]planned, int, int64) {
 	weights := slices.Clone(folderWeights)
-	if !legalHolds {
-		weights[slices.Index(folderNames, "Legal Holds")] = 0
+	if !holds {
+		for _, name := range holdFolders {
+			weights[slices.Index(folderNames, name)] = 0
+		}
 	}
 	sum := 0
 	for _, w := range weights {
