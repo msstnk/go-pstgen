@@ -1,7 +1,7 @@
 package main
 
 // version is the release version of go-pstprune (tag releases as v<version>).
-const version = "v0.1.3-rc.1"
+const version = "v0.1.3"
 
 const credit = `go-pstprune ` + version + ` - PST folder pruner
 Copyright (c) 2026 msstnk. Released under the MIT License.
