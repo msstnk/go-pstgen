@@ -20,7 +20,7 @@ The repository also ships a second tool, [`go-pstprune`](#go-pstprune), which cu
 **Features**
 
 - Pure Go, no CGO. One binary for Linux and one for Windows.
-- Purview-style folders: `Inbox`, `Sent Items`, `Deleted Items`, `Recoverable-Items` (hyphenated, as Purview names it) with `Deletions`, `Purges`, `Versions` and `DiscoveryHolds`.
+- Purview-style folders: `Inbox`, `Sent Items`, `Deleted Items`, `Recoverable-Items` (hyphenated, as Purview names it) with `Deletions`, `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds`.
 - Mailbox sizes follow a normal (or log-normal) distribution and message sizes a log-normal one, with optional attachments.
 - Files are split into `<UPN>.pst`, `<UPN>-2.pst`, ... when they get too big.
 - Parallel workers, so 100 mailboxes finish in seconds.
@@ -87,7 +87,7 @@ bin/go-pstgen --config config.json
 
 ## go-pstprune
 
-`go-pstprune` cuts folders out of existing PST files. Purview exports almost always contain the hold area under `Recoverable-Items` (`Deletions`, `Purges`, `Versions`, `DiscoveryHolds`, ...), and this is a pre-processing step to keep it from showing up after migration. It also works on the files `go-pstgen` generates, which makes it easy to try out.
+`go-pstprune` cuts folders out of existing PST files. Purview exports almost always contain the hold area under `Recoverable-Items` (`Deletions`, `Purges`, `Versions`, `DiscoveryHolds`, `SubstrateHolds`, ...), and this is a pre-processing step to keep it from showing up after migration. It also works on the files `go-pstgen` generates, which makes it easy to try out.
 
 ```sh
 go-pstprune --file 'output/*.pst' --path 'Recoverable-Items/*'
@@ -135,7 +135,7 @@ Leave a key out and you get the default from the table below. A key that doesn't
 | `attachment_ratio` | `0.3` | Fraction of messages with an attachment |
 | `seed` | `null` | Random seed. If `null`, the current time is used |
 | `crypt_method` | `"permute"` | PST encryption method: `none` / `permute` / `cyclic` |
-| `holds_ratio` | `1.0` | Fraction of mailboxes (0.0-1.0) that have the hold folders `Purges`, `Versions` and `DiscoveryHolds` (holds are in effect). The other mailboxes get no such folders, and their share of messages is spread over the other folders |
+| `holds_ratio` | `1.0` | Fraction of mailboxes (0.0-1.0) that have the hold folders `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds` (holds are in effect). The other mailboxes get no such folders, and their share of messages is spread over the other folders |
 | `end_date` | `""` (run time) | Latest message date. RFC 3339 (`2026-03-31T12:00:00Z`) or `YYYY-MM-DD` (end of that day, UTC). If empty, the run time is used |
 | `range_days` | `365` | Messages are dated uniformly within this many days before `end_date` (at least 1) |
 | `split_size_mb` | `10240` | Maximum size of one PST file (MB). Output moves to the next file once the limit is expected to be exceeded. If 0 or less, files are not split |
@@ -195,17 +195,18 @@ Fane so rhet idatin wos ce lerath nod ah. Tre orsen ...
 
 ```
 Top of Personal Folders
-├── Inbox              40%
-├── Sent Items         25%
+├── Inbox              38%
+├── Sent Items         24%
 ├── Deleted Items      15%
 └── Recoverable-Items   (no messages of its own)
     ├── Deletions       8%
     ├── Purges          5%
     ├── Versions        4%
-    └── DiscoveryHolds  3%
+    ├── DiscoveryHolds  3%
+    └── SubstrateHolds  3%
 ```
 
-`Deletions` is user-visible (Recover Deleted Items). `Purges`, `Versions` and `DiscoveryHolds` are hidden from users and exist only on mailboxes under a hold; each mailbox gets them with probability `holds_ratio`. The ones that don't get them simply skip those folders, and the other weights scale up to fill the gap.
+`Deletions` is user-visible (Recover Deleted Items). `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds` are hidden from users and exist only on mailboxes under a hold; each mailbox gets them with probability `holds_ratio`. The ones that don't get them simply skip those folders, and the other weights scale up to fill the gap.
 
 Each message lands in a random folder according to the weights above, and inside a folder the messages are sorted oldest first.
 
