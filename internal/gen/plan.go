@@ -13,15 +13,15 @@ import (
 // Purview names the Recoverable Items root with a hyphen, and imports it as a system folder only when the name matches.
 const recoverableRoot = "Recoverable-Items"
 
-var folderNames = []string{"Inbox", "Sent Items", "Deleted Items", recoverableRoot, "Deletions", "Purges", "Versions", "SubstrateHolds"}
+var folderNames = []string{"Inbox", "Sent Items", "Deleted Items", recoverableRoot, "Deletions", "Purges", "Versions", "DiscoveryHolds"}
 
 // holdFolders exist only in mailboxes with a hold (litigation hold, eDiscovery hold or retention policy) in effect.
-var holdFolders = []string{"Purges", "Versions", "SubstrateHolds"}
+var holdFolders = []string{"Purges", "Versions", "DiscoveryHolds"}
 
 // folderParents maps a folder to its parent's name. Folders not listed are created under the top folder.
 // A parent must appear before its children in folderNames.
 var folderParents = map[string]string{
-	"Deletions": recoverableRoot, "Purges": recoverableRoot, "Versions": recoverableRoot, "SubstrateHolds": recoverableRoot,
+	"Deletions": recoverableRoot, "Purges": recoverableRoot, "Versions": recoverableRoot, "DiscoveryHolds": recoverableRoot,
 }
 
 // Recoverable-Items itself holds no messages in Exchange; its subfolders do.
