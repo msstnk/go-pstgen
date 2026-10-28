@@ -1,6 +1,6 @@
 // go-pstprune detaches folders (and everything below them) from PST files, in place.
 //
-// Intended as a pre-processing step for Purview exports: the Recoverable Items / litigation hold folders are cut out of
+// Intended as a pre-processing step for Purview exports: the Recoverable-Items / litigation hold folders are cut out of
 // the NBT, and the blocks they used are filled with 0x00, so migration tools and users never see them.
 package main
 
@@ -24,12 +24,12 @@ func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 func main() {
 	var files, paths listFlag
 	flag.Var(&files, "file", "PST file or glob, e.g. 'output/*.pst' (repeatable; extra arguments are treated as files too)")
-	flag.Var(&paths, "path", "folder path to prune, e.g. 'Recoverable Items/*' (repeatable; segments are case-insensitive globs)")
+	flag.Var(&paths, "path", "folder path to prune, e.g. 'Recoverable-Items/*' (repeatable; segments are case-insensitive globs)")
 	noFill := flag.Bool("no-fill", false, "only detach the nodes from the NBT; do not zero-fill their blocks")
 	dryRun := flag.Bool("dry-run", false, "report what would be pruned without modifying any file")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() {
-		fmt.Fprint(flag.CommandLine.Output(), credit, "\nUsage:\n  go-pstprune --file output/*.pst --path \"Recoverable Items/*\" [--no-fill] [--dry-run]\n\nFiles are modified in place.\n\nOptions:\n")
+		fmt.Fprint(flag.CommandLine.Output(), credit, "\nUsage:\n  go-pstprune --file output/*.pst --path \"Recoverable-Items/*\" [--no-fill] [--dry-run]\n\nFiles are modified in place.\n\nOptions:\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()

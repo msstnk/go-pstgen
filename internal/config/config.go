@@ -30,7 +30,7 @@ type Config struct {
 	Seed               *int64   `json:"seed"`
 	CryptMethod        string   `json:"crypt_method"`  // none / permute (default) / cyclic
 	SplitSizeMB        float64  `json:"split_size_mb"` // values <= 0 disable splitting
-	HoldsRatio         float64  `json:"holds_ratio"`   // fraction of mailboxes that have the hold folders (Purges, Versions, DiscoveryHolds)
+	HoldsRatio         float64  `json:"holds_ratio"`   // fraction of mailboxes that have the hold folders (Purges, Versions, SubstrateHolds)
 	EndDate            string   `json:"end_date"`      // latest message date: RFC 3339 or YYYY-MM-DD (end of that day, UTC); empty = run time
 	RangeDays          int      `json:"range_days"`    // messages are dated within this many days before end_date
 

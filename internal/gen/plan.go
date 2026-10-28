@@ -10,18 +10,21 @@ import (
 	"github.com/msstnk/go-pstgen/internal/config"
 )
 
-var folderNames = []string{"Inbox", "Sent Items", "Deleted Items", "Recoverable Items", "Deletions", "Purges", "Versions", "DiscoveryHolds"}
+// Purview names the Recoverable Items root with a hyphen, and imports it as a system folder only when the name matches.
+const recoverableRoot = "Recoverable-Items"
+
+var folderNames = []string{"Inbox", "Sent Items", "Deleted Items", recoverableRoot, "Deletions", "Purges", "Versions", "SubstrateHolds"}
 
 // holdFolders exist only in mailboxes with a hold (litigation hold, eDiscovery hold or retention policy) in effect.
-var holdFolders = []string{"Purges", "Versions", "DiscoveryHolds"}
+var holdFolders = []string{"Purges", "Versions", "SubstrateHolds"}
 
 // folderParents maps a folder to its parent's name. Folders not listed are created under the top folder.
 // A parent must appear before its children in folderNames.
 var folderParents = map[string]string{
-	"Deletions": "Recoverable Items", "Purges": "Recoverable Items", "Versions": "Recoverable Items", "DiscoveryHolds": "Recoverable Items",
+	"Deletions": recoverableRoot, "Purges": recoverableRoot, "Versions": recoverableRoot, "SubstrateHolds": recoverableRoot,
 }
 
-// Recoverable Items itself holds no messages in Exchange; its subfolders do.
+// Recoverable-Items itself holds no messages in Exchange; its subfolders do.
 var folderWeights = []int{40, 25, 15, 0, 8, 5, 4, 3}
 
 type planned struct {

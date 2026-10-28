@@ -60,7 +60,9 @@ func generate(cfg config.Config, c *corpus, j job) error {
 				if !ok {
 					return fmt.Errorf("parent folder %q of %q must come before it in folderNames", parent, name)
 				}
-				folders[name] = s.AddFolder(pf, name)
+				folders[name] = s.AddPlainFolder(pf, name)
+			case name == recoverableRoot:
+				folders[name] = s.AddPlainFolder(s.Top, name)
 			default:
 				folders[name] = s.AddFolder(s.Top, name)
 			}

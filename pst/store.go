@@ -113,6 +113,11 @@ func (s *Store) AddFolder(parent *Folder, name string) *Folder {
 	return s.newFolder(parent, s.w.NewNID(nidFolder), name, "IPF.Note")
 }
 
+// AddPlainFolder adds a folder under the parent without PidTagContainerClass, like the Recoverable Items folders in a Purview export.
+func (s *Store) AddPlainFolder(parent *Folder, name string) *Folder {
+	return s.newFolder(parent, s.w.NewNID(nidFolder), name, "")
+}
+
 func (s *Store) entryID(nid uint32) []byte {
 	b := make([]byte, 24)
 	copy(b[4:], s.recKey[:])
