@@ -22,7 +22,7 @@ func main() {
 	}
 	flag.Parse()
 	if *showVersion {
-		fmt.Println("go-pstgen", version)
+		fmt.Println("go-pstgen", versionString())
 		return
 	}
 	if *initConfig {
