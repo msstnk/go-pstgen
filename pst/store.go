@@ -190,7 +190,7 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 	sc.addNode(nidRecipTable, buildTC(colsRecipient, rrows, rsc), rsc)
 
 	// attachments
-	size := int32(len(m.Body)*2 + 1024)
+	size := int32(len(m.Body)*2 + MessageBaseSize)
 	if len(m.Attachments) > 0 {
 		var arows []Row
 		for i, a := range m.Attachments {
@@ -208,7 +208,7 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 				cell(0x0E20, i32(int32(len(a.Data)))), cell(0x3704, UTF16LE(a.Name)),
 				cell(0x3705, i32(1)), cell(0x370B, i32(-1)),
 			}})
-			size += int32(len(a.Data)) + 512
+			size += int32(len(a.Data)) + AttachmentSizeOverhead
 		}
 		asc := newSubCtx(w)
 		sc.addNode(nidAttachTable, buildTC(colsAttachment, arows, asc), asc)
@@ -301,6 +301,12 @@ func (s *Store) writeFolder(f *Folder) {
 	ach := buildTC(colsAssoc, nil, asc)
 	w.PutNode(base|nidAssoc, 0, ach, asc.subs)
 }
+
+// PidTagMessageSize (0x0E08) is MessageBaseSize + 2*len(body), plus len(data) + AttachmentSizeOverhead per attachment.
+const (
+	MessageBaseSize        = 1024
+	AttachmentSizeOverhead = 512
+)
 
 // EstimatedSize estimates the file size after Close: the bytes already written plus
 // a rough allowance for the content tables, B-Tree pages and system nodes added at Close.

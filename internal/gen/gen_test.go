@@ -103,7 +103,7 @@ func TestPlanMessagesCount(t *testing.T) {
 	for _, l := range plan {
 		got += len(l)
 		for _, p := range l {
-			sum += int64(p.size)
+			sum += int64(p.size())
 		}
 	}
 	if n != 123 || got != 123 || sum != total {
@@ -140,14 +140,42 @@ func TestPlanMessagesFolders(t *testing.T) {
 	}
 }
 
-func TestSampleSizeBounds(t *testing.T) {
+func TestSampleSizesBounds(t *testing.T) {
 	cfg := config.Default()
-	cfg.LogVariance = 3 // wide enough to hit both clamps
+	cfg.LogVariance, cfg.BodyLogVariance = 3, 3 // wide enough to hit both clamps
+	cfg.MinSizeKB = 10
 	rng := rand.New(rand.NewSource(1))
 	lo, hi := cfg.MinSizeKB*1024, cfg.MaxSizeKB*1024
 	for i := 0; i < 20000; i++ {
-		if s := sampleSize(rng, cfg); s < lo || s > hi {
-			t.Fatalf("size %d outside [%d, %d]", s, lo, hi)
+		body, attach := sampleSizes(rng, cfg)
+		if s := (planned{body: body, attach: attach}).size(); s < lo || s > hi || body < 1 {
+			t.Fatalf("body %d attach %d: size %d outside [%d, %d]", body, attach, s, lo, hi)
+		}
+	}
+}
+
+func TestSampleSizesMeans(t *testing.T) {
+	for _, ratio := range []float64{0, 0.1, 0.3, 1} {
+		cfg := config.Default()
+		cfg.AttachmentRatio = ratio
+		cfg.MeanSizeKB = 100
+		cfg.MaxSizeKB = 1 << 20 // avoid clamping bias
+		rng := rand.New(rand.NewSource(1))
+		const n = 400000
+		var sum float64
+		var withAttach int
+		for i := 0; i < n; i++ {
+			body, attach := sampleSizes(rng, cfg)
+			sum += float64((planned{body: body, attach: attach}).size())
+			if attach > 0 {
+				withAttach++
+			}
+		}
+		if mean := sum / n / 1024; math.Abs(mean-100) > 3 {
+			t.Errorf("ratio %.1f: mean size %.1f KB, want about 100", ratio, mean)
+		}
+		if got := float64(withAttach) / n; math.Abs(got-ratio) > 0.01 {
+			t.Errorf("ratio %.1f: attachment share %.3f", ratio, got)
 		}
 	}
 }

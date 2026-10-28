@@ -9,24 +9,15 @@ import (
 	"github.com/msstnk/go-pstgen/pst"
 )
 
-const headerOverhead = 600 // approximate number of bytes taken by headers
-
 func buildMessage(rng *rand.Rand, c *corpus, p planned) *pst.Message {
 	sender := c.person(rng)
 	domain := sender.Addr[strings.IndexByte(sender.Addr, '@')+1:]
 	subject := c.sentence(rng, 3+rng.Intn(6))
 	to, cc := c.people(rng), c.people(rng)
 
-	const minBody = 200
-	var bodyBytes, attachBytes int
-	if p.hasAttach {
-		bodyBytes = minBody
-		attachBytes = max(p.size-headerOverhead-len(subject)-bodyBytes, 1)
-	} else {
-		bodyBytes = max(p.size-headerOverhead-len(subject), minBody)
-	}
 	// The body is stored as UTF-16, so the character count is half the target byte count
-	body := c.body(rng, bodyBytes/2)
+	body := c.body(rng, p.body/2)
+	attachBytes := p.attach
 
 	var id [16]byte
 	rng.Read(id[:])

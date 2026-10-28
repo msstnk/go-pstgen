@@ -4,6 +4,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -25,8 +26,10 @@ type Config struct {
 	MinSizeKB          int      `json:"min_size_kb"`
 	MaxSizeKB          int      `json:"max_size_kb"`
 	MeanSizeKB         int      `json:"mean_size_kb"`
-	LogVariance        float64  `json:"log_variance"`
+	LogVariance        float64  `json:"log_variance"` // log variance of the attachment size
 	AttachmentRatio    float64  `json:"attachment_ratio"`
+	BodyMeanKB         float64  `json:"body_mean_kb"`
+	BodyLogVariance    float64  `json:"body_log_variance"`
 	Seed               *int64   `json:"seed"`
 	CryptMethod        string   `json:"crypt_method"`  // none / permute (default) / cyclic
 	SplitSizeMB        float64  `json:"split_size_mb"` // values <= 0 disable splitting
@@ -43,7 +46,7 @@ func Default() Config {
 	return Config{
 		OutputDir: "./output", Mailboxes: []string{"user01@example.com"},
 		MailboxMeanMB: 1000, MailboxStddevMB: 200, Workers: runtime.NumCPU(),
-		MinSizeKB: 10, MaxSizeKB: 10240, MeanSizeKB: 150, LogVariance: 0.5, AttachmentRatio: 0.3,
+		MinSizeKB: 1, MaxSizeKB: 10240, MeanSizeKB: 150, LogVariance: 0.5, AttachmentRatio: 0.3, BodyMeanKB: 10, BodyLogVariance: 1.0,
 		SplitSizeMB: 10240, HoldsRatio: 1.0, RangeDays: 365,
 	}
 }
@@ -66,6 +69,21 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.MinSizeKB < 1 || cfg.MaxSizeKB < cfg.MinSizeKB {
 		return cfg, fmt.Errorf("invalid min_size_kb/max_size_kb")
+	}
+	if cfg.MeanSizeKB < 1 {
+		return cfg, fmt.Errorf("invalid mean_size_kb (must be at least 1)")
+	}
+	if cfg.AttachmentRatio < 0 || cfg.AttachmentRatio > 1 {
+		return cfg, fmt.Errorf("invalid attachment_ratio (must be between 0 and 1)")
+	}
+	if cfg.LogVariance < 0 || cfg.BodyLogVariance < 0 {
+		return cfg, fmt.Errorf("invalid log_variance/body_log_variance (must not be negative)")
+	}
+	if cfg.BodyMeanKB <= 0 {
+		return cfg, fmt.Errorf("invalid body_mean_kb (must be greater than 0)")
+	}
+	if cfg.AttachmentRatio > 0 && cfg.BodyMeanKB*1024 >= float64(cfg.MeanSizeKB*1024-pst.MessageBaseSize) {
+		return cfg, fmt.Errorf("invalid body_mean_kb (must be smaller than mean_size_kb)")
 	}
 	if cfg.MailboxLogVariance != nil && *cfg.MailboxLogVariance <= 0 {
 		return cfg, fmt.Errorf("invalid mailbox_log_variance (must be greater than 0)")
@@ -90,4 +108,45 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("invalid crypt_method %q (none / permute / cyclic)", cfg.CryptMethod)
 	}
 	return cfg, nil
+}
+
+// MeanBodyAttach returns the mean body size and the mean attachment size (when there is one) in bytes, such that
+// PidTagMessageSize averages mean_size_kb: MessageBaseSize + body + AttachmentRatio*(attachment + AttachmentSizeOverhead).
+func (c Config) MeanBodyAttach() (body, attach float64) {
+	payload := float64(c.MeanSizeKB*1024 - pst.MessageBaseSize)
+	if c.AttachmentRatio <= 0 {
+		return payload, 0
+	}
+	body = c.BodyMeanKB * 1024
+	return body, (payload-body)/c.AttachmentRatio - pst.AttachmentSizeOverhead
+}
+
+// WriteTemplate writes a minimal config file (24 mailboxes of about 100 MB on 8 workers) to path.
+// An existing file is never overwritten.
+func WriteTemplate(path string) error {
+	var mailboxes []string
+	for i := 1; i <= 24; i++ {
+		mailboxes = append(mailboxes, fmt.Sprintf("user%02d@example.com", i))
+	}
+	data, err := json.MarshalIndent(struct {
+		Mailboxes       []string `json:"mailboxes"`
+		MailboxMeanMB   int      `json:"mailbox_mean_mb"`
+		MailboxStddevMB int      `json:"mailbox_stddev_mb"`
+		Workers         int      `json:"workers"`
+	}{mailboxes, 100, 20, 8}, "", "  ")
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%s already exists; not overwriting", path)
+		}
+		return err
+	}
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
