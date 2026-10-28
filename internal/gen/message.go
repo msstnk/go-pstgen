@@ -9,24 +9,15 @@ import (
 	"github.com/msstnk/go-pstgen/pst"
 )
 
-const headerOverhead = 600 // approximate number of bytes taken by headers
-
 func buildMessage(rng *rand.Rand, c *corpus, p planned) *pst.Message {
 	sender := c.person(rng)
 	domain := sender.Addr[strings.IndexByte(sender.Addr, '@')+1:]
 	subject := c.sentence(rng, 3+rng.Intn(6))
 	to, cc := c.people(rng), c.people(rng)
 
-	const minBody = 200
-	var bodyBytes, attachBytes int
-	if p.hasAttach {
-		bodyBytes = minBody
-		attachBytes = max(p.size-headerOverhead-len(subject)-bodyBytes, 1)
-	} else {
-		bodyBytes = max(p.size-headerOverhead-len(subject), minBody)
-	}
 	// The body is stored as UTF-16, so the character count is half the target byte count
-	body := c.body(rng, bodyBytes/2)
+	body := c.body(rng, p.body/2)
+	attachBytes := p.attach
 
 	var id [16]byte
 	rng.Read(id[:])
@@ -38,8 +29,12 @@ func buildMessage(rng *rand.Rand, c *corpus, p planned) *pst.Message {
 		}
 		return strings.Join(s, ", ")
 	}
+	when := p.ts // when the message was sent; a meeting is created before it starts
+	if p.dur > 0 {
+		when = p.created
+	}
 	headers := "Message-ID: " + msgID + "\r\n" +
-		"Date: " + p.ts.Format(time.RFC1123Z) + "\r\n" +
+		"Date: " + when.Format(time.RFC1123Z) + "\r\n" +
 		"From: " + fmtP([]pst.Person{sender}) + "\r\n" +
 		"To: " + fmtP(to) + "\r\n" +
 		"Cc: " + fmtP(cc) + "\r\n" +
@@ -49,15 +44,27 @@ func buildMessage(rng *rand.Rand, c *corpus, p planned) *pst.Message {
 
 	m := &pst.Message{
 		Subject: subject, Body: body, Sender: sender, To: to, Cc: cc,
-		Submit: p.ts, Delivery: p.ts, MessageID: msgID, Headers: headers,
+		Submit: when, Delivery: when, MessageID: msgID, Headers: headers,
+	}
+	if p.dur > 0 {
+		// Accepted within a day of being created, but before the meeting starts
+		reply := p.created.Add(time.Duration(rng.Float64() * float64(24*time.Hour)))
+		if reply.After(p.ts) {
+			reply = p.ts
+		}
+		m.Appt = &pst.Appointment{Start: p.ts, End: p.ts.Add(p.dur), Reply: reply, Location: randomString(rng, 6+rng.Intn(7))}
 	}
 	if attachBytes > 0 {
-		const lc = "abcdefghijklmnopqrstuvwxyz0123456789"
-		name := make([]byte, 12)
-		for i := range name {
-			name[i] = lc[rng.Intn(len(lc))]
-		}
-		m.Attachments = []pst.Attachment{{Name: string(name) + ".attach", Data: c.attachData(rng, attachBytes)}}
+		m.Attachments = []pst.Attachment{{Name: randomString(rng, 12) + ".attach", Data: c.attachData(rng, attachBytes)}}
 	}
 	return m
+}
+
+func randomString(rng *rand.Rand, n int) string {
+	const lc = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = lc[rng.Intn(len(lc))]
+	}
+	return string(b)
 }

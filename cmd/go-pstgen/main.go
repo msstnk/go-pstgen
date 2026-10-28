@@ -14,14 +14,23 @@ import (
 
 func main() {
 	cfgPath := flag.String("config", "config.json", "JSON config file")
+	initConfig := flag.Bool("init", false, "write a minimal config.json to the current directory and exit")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() {
-		fmt.Fprint(flag.CommandLine.Output(), credit, "\nUsage:\n  go-pstgen [--config config.json]\n\nOptions:\n")
+		fmt.Fprint(flag.CommandLine.Output(), credit, "\nUsage:\n  go-pstgen [--config config.json | --init | --version]\n\nOptions:\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 	if *showVersion {
-		fmt.Println("go-pstgen", version)
+		fmt.Println("go-pstgen", versionString())
+		return
+	}
+	if *initConfig {
+		if err := config.WriteTemplate("config.json"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("wrote config.json")
 		return
 	}
 	cfg, err := config.Load(*cfgPath)

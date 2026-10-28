@@ -34,7 +34,7 @@ func main() {
 	}
 	flag.Parse()
 	if *showVersion {
-		fmt.Println("go-pstprune", version)
+		fmt.Println("go-pstprune", versionString())
 		return
 	}
 	// An unquoted glob is expanded by the shell, so the files after the first one arrive as positional arguments.

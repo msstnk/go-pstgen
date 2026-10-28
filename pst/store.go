@@ -35,6 +35,13 @@ type Attachment struct {
 	Data []byte
 }
 
+// Appointment makes a Message an IPM.Appointment (a meeting organized by Sender, with To/Cc as attendees).
+type Appointment struct {
+	Start, End time.Time
+	Reply      time.Time // when the meeting was accepted
+	Location   string
+}
+
 // Message is one message. Its contents are not retained after Write.
 type Message struct {
 	Subject, Body      string
@@ -43,10 +50,12 @@ type Message struct {
 	Submit, Delivery   time.Time
 	MessageID, Headers string
 	Attachments        []Attachment
+	Appt               *Appointment // non-nil: the message class is IPM.Appointment instead of IPM.Note
 }
 
 type contentRow struct {
 	nid                  uint32
+	class                string
 	subject, sender      string
 	displayTo, displayCc string
 	submit, delivery     int64
@@ -111,6 +120,11 @@ func (s *Store) newFolder(parent *Folder, nid uint32, name, class string) *Folde
 // AddFolder adds an IPF.Note folder under the parent.
 func (s *Store) AddFolder(parent *Folder, name string) *Folder {
 	return s.newFolder(parent, s.w.NewNID(nidFolder), name, "IPF.Note")
+}
+
+// AddCalendarFolder adds an IPF.Appointment folder under the parent.
+func (s *Store) AddCalendarFolder(parent *Folder, name string) *Folder {
+	return s.newFolder(parent, s.w.NewNID(nidFolder), name, "IPF.Appointment")
 }
 
 // AddPlainFolder adds a folder under the parent without PidTagContainerClass, like the Recoverable Items folders in a Purview export.
@@ -190,7 +204,7 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 	sc.addNode(nidRecipTable, buildTC(colsRecipient, rrows, rsc), rsc)
 
 	// attachments
-	size := int32(len(m.Body)*2 + 1024)
+	size := int32(len(m.Body)*2 + MessageBaseSize)
 	if len(m.Attachments) > 0 {
 		var arows []Row
 		for i, a := range m.Attachments {
@@ -208,7 +222,7 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 				cell(0x0E20, i32(int32(len(a.Data)))), cell(0x3704, UTF16LE(a.Name)),
 				cell(0x3705, i32(1)), cell(0x370B, i32(-1)),
 			}})
-			size += int32(len(a.Data)) + 512
+			size += int32(len(a.Data)) + AttachmentSizeOverhead
 		}
 		asc := newSubCtx(w)
 		sc.addNode(nidAttachTable, buildTC(colsAttachment, arows, asc), asc)
@@ -219,10 +233,14 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 	if hasAttach {
 		flags |= 0x10
 	}
+	class := "IPM.Note"
+	if m.Appt != nil {
+		class = "IPM.Appointment"
+	}
 	toS, ccS := joinNames(m.To), joinNames(m.Cc)
 	sub, dlv := FileTime(m.Submit), FileTime(m.Delivery)
 	props := []Prop{
-		PInt32(0x0017, 1), PStr(0x001A, "IPM.Note"), PInt32(0x0026, 0), PInt32(0x0036, 0),
+		PInt32(0x0017, 1), PStr(0x001A, class), PInt32(0x0026, 0), PInt32(0x0036, 0),
 		PStr(0x0037, m.Subject), PTime(0x0039, sub),
 		PStr(0x0042, m.Sender.Name), PStr(0x0064, "SMTP"), PStr(0x0065, m.Sender.Addr),
 		PStr(0x0070, m.Subject), PStr(0x007D, m.Headers),
@@ -234,11 +252,14 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 		PStr(0x0E1D, m.Subject), PStr(0x1000, m.Body), PStr(0x1035, m.MessageID),
 		PTime(0x3007, sub), PTime(0x3008, dlv),
 	}
+	if a := m.Appt; a != nil {
+		props = append(props, apptProps(a)...)
+	}
 	chunks := buildPC(props, sc)
 	w.PutNode(nid, f.NID, chunks, sc.subs)
 	s.rowSize += 128 + 2*int64(len(m.Subject)+len(m.Sender.Name)+len(toS)+len(ccS))
 	f.rows = append(f.rows, contentRow{
-		nid: nid, subject: m.Subject, sender: m.Sender.Name, displayTo: toS, displayCc: ccS,
+		nid: nid, class: class, subject: m.Subject, sender: m.Sender.Name, displayTo: toS, displayCc: ccS,
 		submit: sub, delivery: dlv, flags: flags, size: size, hasAttach: hasAttach,
 	})
 }
@@ -287,7 +308,7 @@ func (s *Store) writeFolder(f *Folder) {
 	crows := make([]Row, len(f.rows))
 	for i, r := range f.rows {
 		crows[i] = Row{ID: r.nid, Cells: []Cell{
-			cell(0x0017, i32(1)), cell(0x001A, UTF16LE("IPM.Note")), cell(0x0036, i32(0)),
+			cell(0x0017, i32(1)), cell(0x001A, UTF16LE(r.class)), cell(0x0036, i32(0)),
 			cell(0x0037, UTF16LE(r.subject)), cell(0x0039, i64(r.submit)), cell(0x0042, UTF16LE(r.sender)),
 			cell(0x0E03, UTF16LE(r.displayCc)), cell(0x0E04, UTF16LE(r.displayTo)), cell(0x0E06, i64(r.delivery)),
 			cell(0x0E07, i32(r.flags)), cell(0x0E08, i32(r.size)), cell(0x0E17, i32(0)),
@@ -301,6 +322,12 @@ func (s *Store) writeFolder(f *Folder) {
 	ach := buildTC(colsAssoc, nil, asc)
 	w.PutNode(base|nidAssoc, 0, ach, asc.subs)
 }
+
+// PidTagMessageSize (0x0E08) is MessageBaseSize + 2*len(body), plus len(data) + AttachmentSizeOverhead per attachment.
+const (
+	MessageBaseSize        = 1024
+	AttachmentSizeOverhead = 512
+)
 
 // EstimatedSize estimates the file size after Close: the bytes already written plus
 // a rough allowance for the content tables, B-Tree pages and system nodes added at Close.
@@ -329,6 +356,10 @@ func (s *Store) Close() error {
 		w.PutNode(n.nid, n.parent, chunks, nil)
 	}
 
+	nsc := newSubCtx(w)
+	nch := nameToIDNode(nsc)
+	w.PutNode(nidNameToID, 0, nch, nsc.subs)
+
 	// 0x0E34 is store identification info containing a GUID. Vary the GUID part per store.
 	var info [24]byte
 	le.PutUint32(info[0:], 1)
@@ -352,3 +383,23 @@ func (s *Store) Close() error {
 
 // Abort closes an unfinished file.
 func (s *Store) Abort() { s.w.Abort() }
+
+// apptProps are the named properties of a single (non-recurring) meeting organized by the sender and accepted,
+// that is shown as busy, with no reminder.
+func apptProps(a *Appointment) []Prop {
+	start, end := FileTime(a.Start), FileTime(a.End)
+	return []Prop{
+		PTime(0x0060, start), PTime(0x0061, end), // PidTagStartDate, PidTagEndDate
+		PTime(propApptStart, start), PTime(propApptEnd, end),
+		PTime(propClipStart, start), PTime(propClipEnd, end),
+		PTime(propCommonStart, start), PTime(propCommonEnd, end),
+		PInt32(propApptDuration, int32(a.End.Sub(a.Start)/time.Minute)),
+		PStr(propLocation, a.Location),
+		PInt32(propBusyStatus, 2), // olBusy
+		PBool(propRecurring, false), PBool(propApptSubType, false),
+		PInt32(propApptStateFlags, 3), // asfMeeting | asfReceived
+		PInt32(propResponseStatus, 3), // respAccepted
+		PTime(propReplyTime, FileTime(a.Reply)),
+		PBool(propReminderSet, false), PInt32(propReminderDelta, 15),
+	}
+}

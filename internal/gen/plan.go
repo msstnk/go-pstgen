@@ -8,12 +8,13 @@ import (
 	"time"
 
 	"github.com/msstnk/go-pstgen/internal/config"
+	"github.com/msstnk/go-pstgen/pst"
 )
 
 // Purview names the Recoverable Items root with a hyphen, and imports it as a system folder only when the name matches.
 const recoverableRoot = "Recoverable-Items"
 
-var folderNames = []string{"Inbox", "Sent Items", "Deleted Items", recoverableRoot, "Deletions", "Purges", "Versions", "DiscoveryHolds", "SubstrateHolds"}
+var folderNames = []string{"Inbox", "Sent Items", "Deleted Items", calendarFolder, recoverableRoot, "Deletions", "Purges", "Versions", "DiscoveryHolds", "SubstrateHolds"}
 
 // holdFolders exist only in mailboxes with a hold (litigation hold, eDiscovery hold or retention policy) in effect.
 var holdFolders = []string{"Purges", "Versions", "DiscoveryHolds", "SubstrateHolds"}
@@ -25,18 +26,49 @@ var folderParents = map[string]string{
 }
 
 // Recoverable-Items itself holds no messages in Exchange; its subfolders do.
-var folderWeights = []int{38, 24, 15, 0, 8, 5, 4, 3, 3}
+var folderWeights = []int{36, 22, 14, 5, 0, 8, 5, 4, 3, 3}
 
 type planned struct {
-	ts        time.Time
-	size      int
-	hasAttach bool
+	ts     time.Time
+	body   int // body size in bytes (before UTF-16 conversion)
+	attach int // attachment size in bytes; 0 = no attachment
+
+	// Meetings (Calendar folder) only: ts is the start time, and dur the length (0 = not a meeting).
+	dur     time.Duration
+	created time.Time
 }
 
-func sampleSize(rng *rand.Rand, cfg config.Config) int {
-	mu := math.Log(float64(cfg.MeanSizeKB*1024)) - cfg.LogVariance/2
-	s := math.Exp(mu + math.Sqrt(cfg.LogVariance)*rng.NormFloat64())
-	return int(math.Min(math.Max(s, float64(cfg.MinSizeKB*1024)), float64(cfg.MaxSizeKB*1024)))
+// size is the value of PidTagMessageSize.
+func (p planned) size() int {
+	if p.attach > 0 {
+		return pst.MessageBaseSize + p.body + p.attach + pst.AttachmentSizeOverhead
+	}
+	return pst.MessageBaseSize + p.body
+}
+
+// logNormal samples a log-normal value with the given mean (not median) and log variance.
+func logNormal(rng *rand.Rand, mean, variance float64) float64 {
+	return math.Exp(math.Log(mean) - variance/2 + math.Sqrt(variance)*rng.NormFloat64())
+}
+
+// sampleSizes draws the body size, and with probability attachment_ratio an attachment size, both log-normal.
+// The total is clamped to [min_size_kb, max_size_kb] by trimming the attachment first, then growing or trimming the body.
+func sampleSizes(rng *rand.Rand, cfg config.Config) (body, attach int) {
+	bm, am := cfg.MeanBodyAttach()
+	body = max(int(logNormal(rng, bm, cfg.BodyLogVariance)), 1)
+	if am > 0 && rng.Float64() < cfg.AttachmentRatio {
+		attach = max(int(logNormal(rng, am, cfg.LogVariance)), 1)
+	}
+	lo, hi := cfg.MinSizeKB*1024, cfg.MaxSizeKB*1024
+	if over := (planned{body: body, attach: attach}).size() - hi; over > 0 {
+		cut := min(over, max(attach-1, 0))
+		attach -= cut
+		body = max(body-(over-cut), 1)
+	}
+	if short := lo - (planned{body: body, attach: attach}).size(); short > 0 {
+		body += short
+	}
+	return body, attach
 }
 
 // planMessages generates metadata only and sorts it by time ascending within each folder.
@@ -55,15 +87,19 @@ func planMessages(rng *rand.Rand, cfg config.Config, target int64, holds bool) (
 	var total int64
 	n := 0
 	for (cfg.TotalMessages > 0 && n < cfg.TotalMessages) || (cfg.TotalMessages <= 0 && total < target) {
-		size := sampleSize(rng, cfg)
+		body, attach := sampleSizes(rng, cfg)
 		r := rng.Intn(sum)
 		fi := 0
 		for acc := weights[0]; r >= acc; acc += weights[fi] {
 			fi++
 		}
 		ts := cfg.End.Add(-time.Duration(rng.Float64() * float64(cfg.RangeDays) * 86400 * float64(time.Second)))
-		plan[fi] = append(plan[fi], planned{ts, size, rng.Float64() < cfg.AttachmentRatio})
-		total += int64(size)
+		p := planned{ts: ts, body: body, attach: attach}
+		if folderNames[fi] == calendarFolder {
+			p.ts, p.dur, p.created = sampleMeeting(rng, cfg)
+		}
+		plan[fi] = append(plan[fi], p)
+		total += int64(p.size())
 		n++
 	}
 	for _, l := range plan {

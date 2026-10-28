@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/msstnk/go-pstgen/pst"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,9 @@ func TestLoadConfigDateDefaults(t *testing.T) {
 	}
 	if cfg.RangeDays != 365 {
 		t.Errorf("RangeDays = %d, want 365", cfg.RangeDays)
+	}
+	if cfg.CalendarDaysAhead != 14 {
+		t.Errorf("CalendarDaysAhead = %d, want 14", cfg.CalendarDaysAhead)
 	}
 	if cfg.End.Before(before) || cfg.End.After(time.Now().UTC()) {
 		t.Errorf("end = %v, want the current time", cfg.End)
@@ -79,6 +83,7 @@ func TestLoadConfigValidation(t *testing.T) {
 		{"holds below 0", `{"holds_ratio":-0.1}`},
 		{"log variance zero", `{"mailbox_log_variance":0}`},
 		{"log variance negative", `{"mailbox_log_variance":-0.5}`},
+		{"calendar days negative", `{"calendar_days_ahead":-1}`},
 		{"bad crypt", `{"crypt_method":"rot13"}`},
 	}
 	for _, tt := range tests {
@@ -113,5 +118,48 @@ func TestLoadConfigMailboxLogVariance(t *testing.T) {
 	cfg, err = Load(writeConfig(t, `{"mailbox_log_variance":1.2}`))
 	if err != nil || cfg.MailboxLogVariance == nil || *cfg.MailboxLogVariance != 1.2 {
 		t.Fatalf("set: err=%v, log variance=%v, want 1.2", err, cfg.MailboxLogVariance)
+	}
+}
+
+func TestMeanBodyAttach(t *testing.T) {
+	cfg := Default()
+	cfg.MeanSizeKB, cfg.AttachmentRatio = 100, 0.1
+	b, a := cfg.MeanBodyAttach()
+	if b != 10*1024 || pst.MessageBaseSize+b+0.1*(a+pst.AttachmentSizeOverhead) != 100*1024 {
+		t.Errorf("body %v attach %v does not add up to the mean", b, a)
+	}
+	cfg.MeanSizeKB = 8
+	cfg.AttachmentRatio = 0
+	if b, a := cfg.MeanBodyAttach(); a != 0 || b != float64(8*1024-pst.MessageBaseSize) {
+		t.Errorf("ratio 0: body %v attach %v", b, a)
+	}
+}
+
+func TestLoadConfigAttachmentRatio(t *testing.T) {
+	if _, err := Load(writeConfig(t, `{"mean_size_kb": 20, "body_mean_kb": 20}`)); err == nil {
+		t.Error("body_mean_kb >= mean_size_kb: expected error")
+	}
+	if _, err := Load(writeConfig(t, `{"mean_size_kb": 8, "attachment_ratio": 0}`)); err != nil {
+		t.Errorf("ratio 0 ignores body_mean_kb: %v", err)
+	}
+	if _, err := Load(writeConfig(t, `{"attachment_ratio": 1.5}`)); err == nil {
+		t.Error("attachment_ratio > 1: expected error")
+	}
+}
+
+func TestWriteTemplate(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	if err := WriteTemplate(p); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("template does not load: %v", err)
+	}
+	if len(cfg.Mailboxes) != 24 || cfg.MailboxMeanMB != 100 || cfg.Workers != 8 {
+		t.Errorf("unexpected template: %+v", cfg)
+	}
+	if err := WriteTemplate(p); err == nil {
+		t.Error("second write: expected error, not overwriting")
 	}
 }

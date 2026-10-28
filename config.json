@@ -4,6 +4,8 @@
   "mailbox_mean_mb": 1000,
   "mailbox_stddev_mb": 200,
   "split_size_mb": 1000,
+  "body_mean_kb": 10,
+  "body_log_variance": 1.0,
   "attachment_ratio": 0.15,
   "seed": null,
   "crypt_method": "permute"

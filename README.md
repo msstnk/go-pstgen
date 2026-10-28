@@ -20,11 +20,11 @@ The repository also ships a second tool, [`go-pstprune`](#go-pstprune), which cu
 **Features**
 
 - Pure Go, no CGO. One binary for Linux and one for Windows.
-- Purview-style folders: `Inbox`, `Sent Items`, `Deleted Items`, `Recoverable-Items` (hyphenated, as Purview names it) with `Deletions`, `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds`.
+- Purview-style folders: `Inbox`, `Sent Items`, `Deleted Items`, `Calendar` (meetings), `Recoverable-Items` (hyphenated, as Purview names it) with `Deletions`, `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds`.
 - Mailbox sizes follow a normal (or log-normal) distribution and message sizes a log-normal one, with optional attachments.
 - Files are split into `<UPN>.pst`, `<UPN>-2.pst`, ... when they get too big.
 - Parallel workers, so 100 mailboxes finish in seconds.
-- Set a `seed` and you get the same output every time.
+- Set a `seed` and you get the same output every time (with the same version of the tool).
 - `go-pstprune`: detach folders (e.g. `Recoverable-Items/*`) from real PST files in place and zero-fill their data.
 
 [MS-PST]: https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/
@@ -42,7 +42,7 @@ go install github.com/msstnk/go-pstgen/cmd/go-pstprune@latest   # optional, see 
 
 The binaries land in `$(go env GOPATH)/bin` (or `$GOBIN` if set).
 
-`go install` ships only the binary, so there is no `config.json` to go with it. Create your own by hand (see [config.json](#configjson)) and point `--config` at it. Leave out any key you don't need; the defaults apply.
+`go install` ships only the binary, so there is no `config.json` to go with it. Run `go-pstgen --init` to write a minimal one to the current directory (see [Place config.json](#place-configjson)), then edit it to taste (keys are described in [config.json](#configjson)). Leave out any key you don't need; the defaults apply.
 
 ## Build
 
@@ -59,9 +59,9 @@ GOOS=windows CGO_ENABLED=0 go build -o bin/go-pstprune.exe ./cmd/go-pstprune
 
 ## Place config.json
 
-Create a `config.json` file in current directory, or anywhere you like, and point `--config` at it when running `go-pstgen`.
+Run `go-pstgen --init` to write a minimal `config.json` to the current directory (it refuses to overwrite an existing one). Or create one yourself, anywhere you like, and point `--config` at it when running `go-pstgen`.
 
-Most runs only need a few keys. For 24 mailboxes of about 100 MB on 8 cores (write all 24 UPNs out in your real file; the `"..."` here is just shorthand):
+Most runs only need a few keys. The file `--init` writes is for 24 mailboxes of about 100 MB on 8 cores (shortened here with `"..."`):
 
 ```json
 {
@@ -128,17 +128,22 @@ Leave a key out and you get the default from the table below. A key that doesn't
 | `mailbox_log_variance` | `null` | If set (greater than 0), mailbox sizes follow a log-normal distribution with this log variance instead of the normal one: a long tail toward large mailboxes while the mean stays `mailbox_mean_mb` (`mailbox_stddev_mb` is ignored). Around `1.0`-`1.3` looks realistic, but the spread of file sizes gets wide, so handle with care. If `null`, the normal distribution is used |
 | `workers` | number of CPUs | Parallelism (values below 1 become 1; capped at the number of mailboxes) |
 | `total_messages` | `0` | Number of messages per mailbox. If 0 or less, messages are generated until the size target is reached |
-| `min_size_kb` | `10` | Minimum size of a message (KB, at least 1) |
+| `min_size_kb` | `1` | Minimum size of a message (KB, at least 1) |
 | `max_size_kb` | `10240` | Maximum size of a message (KB, at least `min_size_kb`) |
-| `mean_size_kb` | `150` | Mean message size (log-normal distribution) in KB |
-| `log_variance` | `0.5` | Log variance of the message size |
-| `attachment_ratio` | `0.3` | Fraction of messages with an attachment |
-| `seed` | `null` | Random seed. If `null`, the current time is used |
+| `mean_size_kb` | `150` | Mean message size in KB, measured as `PidTagMessageSize` (see [Generation rules](#generation-rules)). The mean attachment size is derived from it |
+| `log_variance` | `0.5` | Log variance of the attachment size |
+| `body_mean_kb` | `10` | Mean body size in KB. Must be smaller than `mean_size_kb` (ignored when `attachment_ratio` is 0, where the body takes the whole mean) |
+| `body_log_variance` | `1.0` | Log variance of the body size |
+| `attachment_ratio` | `0.3` | Fraction of messages with an attachment (0 to 1) |
+| `seed` | `null` | Random seed. If `null`, the current time is used. The same seed gives the same output only within one version; reproducibility across versions is not guaranteed |
 | `crypt_method` | `"permute"` | PST encryption method: `none` / `permute` / `cyclic` |
 | `holds_ratio` | `1.0` | Fraction of mailboxes (0.0-1.0) that have the hold folders `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds` (holds are in effect). The other mailboxes get no such folders, and their share of messages is spread over the other folders |
 | `end_date` | `""` (run time) | Latest message date. RFC 3339 (`2026-03-31T12:00:00Z`) or `YYYY-MM-DD` (end of that day, UTC). If empty, the run time is used |
 | `range_days` | `365` | Messages are dated uniformly within this many days before `end_date` (at least 1) |
+| `calendar_days_ahead` | `14` | Meetings in `Calendar` start between `range_days` days before and this many days after `end_date` (0 or more) |
 | `split_size_mb` | `10240` | Maximum size of one PST file (MB). Output moves to the next file once the limit is expected to be exceeded. If 0 or less, files are not split |
+
+The defaults are tuned to work as they are: `mean_size_kb`, `attachment_ratio` and `mailbox_*` are normally all you need to touch. The body and attachment size keys (`body_mean_kb`, `body_log_variance`, `log_variance`) are for fine-tuning only.
 
 Here's an example with every key set (everything except `mailboxes`, `workers` and `seed` is the default):
 
@@ -151,10 +156,12 @@ Here's an example with every key set (everything except `mailboxes`, `workers` a
   "mailbox_log_variance": null,
   "workers": 4,
   "total_messages": 0,
-  "min_size_kb": 10,
+  "min_size_kb": 1,
   "max_size_kb": 10240,
   "mean_size_kb": 150,
   "log_variance": 0.5,
+  "body_mean_kb": 10,
+  "body_log_variance": 1.0,
   "attachment_ratio": 0.3,
   "seed": 12345,
   "crypt_method": "permute",
@@ -195,9 +202,10 @@ Fane so rhet idatin wos ce lerath nod ah. Tre orsen ...
 
 ```
 Top of Personal Folders
-├── Inbox              38%
-├── Sent Items         24%
-├── Deleted Items      15%
+├── Inbox              36%
+├── Sent Items         22%
+├── Deleted Items      14%
+├── Calendar            5%
 └── Recoverable-Items   (no messages of its own)
     ├── Deletions       8%
     ├── Purges          5%
@@ -208,7 +216,9 @@ Top of Personal Folders
 
 `Deletions` is user-visible (Recover Deleted Items). `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds` are hidden from users and exist only on mailboxes under a hold; each mailbox gets them with probability `holds_ratio`. The ones that don't get them simply skip those folders, and the other weights scale up to fill the gap.
 
-Each message lands in a random folder according to the weights above, and inside a folder the messages are sorted oldest first.
+Each message lands in a random folder according to the weights above, and inside a folder the messages are sorted oldest first (`Calendar`: by start time).
+
+`Calendar` (`IPF.Appointment`) holds single, non-recurring meetings (`IPM.Appointment`, shown as busy, already accepted) organized by the sender, with To / Cc as the attendees. Each starts on the half hour between 01:00 and 23:00 UTC and ends by midnight; the length is 30, 60 or 120 minutes (30% / 65% / 5%). The location is a random string. The size, subject, body, people and attachments follow the same rules as mail, and the item is created 1 hour to 14 days before it starts (never after `end_date`).
 
 **Splitting**
 
@@ -218,9 +228,12 @@ Each message lands in a random folder according to the weights above, and inside
 **Counts and sizes**
 
 - The target size of each mailbox is sampled from the normal distribution given by `mailbox_mean_mb` / `mailbox_stddev_mb`, or, if `mailbox_log_variance` is set, from a log-normal distribution with mean `mailbox_mean_mb`.
-- Message sizes are sampled from a log-normal distribution with mean `mean_size_kb` and log variance `log_variance`, and clamped to `[min_size_kb, max_size_kb]`.
+- A message is a body plus, with probability `attachment_ratio`, one attachment. Both sizes are log-normal: the body has mean `body_mean_kb` and log variance `body_log_variance`; the attachment has log variance `log_variance` and a mean derived so that the expected message size is exactly `mean_size_kb`.
+- "Message size" is the value of `PidTagMessageSize`: 1024 + body bytes, plus attachment bytes + 512 when there is an attachment. The mean attachment size is therefore `(mean_size_kb − 1 KB − body_mean_kb) / attachment_ratio − 512 bytes`. For example, `mean_size_kb` 100, `body_mean_kb` 10 and `attachment_ratio` 0.1 give a mean attachment of about 890 KB (≈ 10 + 0.1 × 890 + 1 = 100).
+- The total is clamped to `[min_size_kb, max_size_kb]`: an oversized message loses attachment bytes first, an undersized one gains body bytes.
+- **Notice:** the smaller `attachment_ratio` is, the larger the mean attachment gets (`mean_size_kb` 100 and `attachment_ratio` 0.03 means about 3 MB). The tail beyond `max_size_kb` is then cut, and the realized mean message size comes out *below* `mean_size_kb`. Raise `max_size_kb` or lower `log_variance` if you need the mean to hold.
+- `PidTagMessageSize` is not the file size: each message takes roughly 5-7 KB more in the PST file (UTF-16 headers, tables, page and block overhead), and the mailbox size target is checked against `PidTagMessageSize` totals, so files come out a little larger than `mailbox_mean_mb` when messages are small.
 - If `total_messages` > 0, exactly that many messages are generated; otherwise messages are generated until the total size reaches the target size.
-- Each message has an attachment with probability `attachment_ratio`.
 
 **Header fields**
 
@@ -239,8 +252,7 @@ Each message lands in a random folder according to the weights above, and inside
 
 - At startup, a pool of 200,000 words is built, and from it a sentence pool of 5-14-word sentences. A line break is inserted every 3-5 sentences.
 - The body is cut from the sentence pool starting at a sentence start and extended to the end of a sentence (period).
-- Without attachment: the body takes (message size − approximate header size of 600 bytes − subject length); the character count is half of that because it is stored as UTF-16. Minimum 200 bytes.
-- With attachment: the body is kept to about 200 bytes and the rest is assigned to the attachment.
+- The body length is sampled independently of the attachment (see above); the character count is half the sampled byte size because it is stored as UTF-16.
 
 **Attachments**
 

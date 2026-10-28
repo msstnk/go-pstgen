@@ -61,6 +61,8 @@ func generate(cfg config.Config, c *corpus, j job) error {
 					return fmt.Errorf("parent folder %q of %q must come before it in folderNames", parent, name)
 				}
 				folders[name] = s.AddPlainFolder(pf, name)
+			case name == calendarFolder:
+				folders[name] = s.AddCalendarFolder(s.Top, name)
 			case name == recoverableRoot:
 				folders[name] = s.AddPlainFolder(s.Top, name)
 			default:
@@ -89,7 +91,7 @@ func generate(cfg config.Config, c *corpus, j job) error {
 	for fi, name := range folderNames {
 		for _, p := range plan[fi] {
 			// If adding this would exceed the split size, move to the next file (the first message is always kept)
-			if splitBytes > 0 && inPart > 0 && s.EstimatedSize()+int64(p.size) > splitBytes {
+			if splitBytes > 0 && inPart > 0 && s.EstimatedSize()+int64(p.size()) > splitBytes {
 				if err := finish(); err != nil {
 					return err
 				}
