@@ -29,8 +29,12 @@ func buildMessage(rng *rand.Rand, c *corpus, p planned) *pst.Message {
 		}
 		return strings.Join(s, ", ")
 	}
+	when := p.ts // when the message was sent; a meeting is created before it starts
+	if p.dur > 0 {
+		when = p.created
+	}
 	headers := "Message-ID: " + msgID + "\r\n" +
-		"Date: " + p.ts.Format(time.RFC1123Z) + "\r\n" +
+		"Date: " + when.Format(time.RFC1123Z) + "\r\n" +
 		"From: " + fmtP([]pst.Person{sender}) + "\r\n" +
 		"To: " + fmtP(to) + "\r\n" +
 		"Cc: " + fmtP(cc) + "\r\n" +
@@ -40,15 +44,22 @@ func buildMessage(rng *rand.Rand, c *corpus, p planned) *pst.Message {
 
 	m := &pst.Message{
 		Subject: subject, Body: body, Sender: sender, To: to, Cc: cc,
-		Submit: p.ts, Delivery: p.ts, MessageID: msgID, Headers: headers,
+		Submit: when, Delivery: when, MessageID: msgID, Headers: headers,
+	}
+	if p.dur > 0 {
+		m.Appt = &pst.Appointment{Start: p.ts, End: p.ts.Add(p.dur), Location: randomString(rng, 6+rng.Intn(7))}
 	}
 	if attachBytes > 0 {
-		const lc = "abcdefghijklmnopqrstuvwxyz0123456789"
-		name := make([]byte, 12)
-		for i := range name {
-			name[i] = lc[rng.Intn(len(lc))]
-		}
-		m.Attachments = []pst.Attachment{{Name: string(name) + ".attach", Data: c.attachData(rng, attachBytes)}}
+		m.Attachments = []pst.Attachment{{Name: randomString(rng, 12) + ".attach", Data: c.attachData(rng, attachBytes)}}
 	}
 	return m
+}
+
+func randomString(rng *rand.Rand, n int) string {
+	const lc = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = lc[rng.Intn(len(lc))]
+	}
+	return string(b)
 }

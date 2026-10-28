@@ -31,11 +31,12 @@ type Config struct {
 	BodyMeanKB         float64  `json:"body_mean_kb"`
 	BodyLogVariance    float64  `json:"body_log_variance"`
 	Seed               *int64   `json:"seed"`
-	CryptMethod        string   `json:"crypt_method"`  // none / permute (default) / cyclic
-	SplitSizeMB        float64  `json:"split_size_mb"` // values <= 0 disable splitting
-	HoldsRatio         float64  `json:"holds_ratio"`   // fraction of mailboxes that have the hold folders (Purges, Versions, DiscoveryHolds, SubstrateHolds)
-	EndDate            string   `json:"end_date"`      // latest message date: RFC 3339 or YYYY-MM-DD (end of that day, UTC); empty = run time
-	RangeDays          int      `json:"range_days"`    // messages are dated within this many days before end_date
+	CryptMethod        string   `json:"crypt_method"`        // none / permute (default) / cyclic
+	SplitSizeMB        float64  `json:"split_size_mb"`       // values <= 0 disable splitting
+	HoldsRatio         float64  `json:"holds_ratio"`         // fraction of mailboxes that have the hold folders (Purges, Versions, DiscoveryHolds, SubstrateHolds)
+	EndDate            string   `json:"end_date"`            // latest message date: RFC 3339 or YYYY-MM-DD (end of that day, UTC); empty = run time
+	RangeDays          int      `json:"range_days"`          // messages are dated within this many days before end_date
+	CalendarDaysAhead  int      `json:"calendar_days_ahead"` // meetings in the Calendar folder may also start up to this many days after end_date
 
 	Crypt pst.CryptMethod `json:"-"`
 	End   time.Time       `json:"-"`
@@ -47,7 +48,7 @@ func Default() Config {
 		OutputDir: "./output", Mailboxes: []string{"user01@example.com"},
 		MailboxMeanMB: 1000, MailboxStddevMB: 200, Workers: runtime.NumCPU(),
 		MinSizeKB: 1, MaxSizeKB: 10240, MeanSizeKB: 150, LogVariance: 0.5, AttachmentRatio: 0.3, BodyMeanKB: 10, BodyLogVariance: 1.0,
-		SplitSizeMB: 10240, HoldsRatio: 1.0, RangeDays: 365,
+		SplitSizeMB: 10240, HoldsRatio: 1.0, RangeDays: 365, CalendarDaysAhead: 14,
 	}
 }
 
@@ -93,6 +94,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.RangeDays < 1 {
 		return cfg, fmt.Errorf("invalid range_days (must be at least 1)")
+	}
+	if cfg.CalendarDaysAhead < 0 {
+		return cfg, fmt.Errorf("invalid calendar_days_ahead (must not be negative)")
 	}
 	if cfg.EndDate == "" {
 		cfg.End = time.Now().UTC()

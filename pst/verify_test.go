@@ -652,6 +652,12 @@ func TestStoreValid(t *testing.T) {
 			big.Attachments = []Attachment{{Name: "big.bin", Data: make([]byte, xbMax*blockMax+12345)}}
 			s.AddMessage(sub, big)
 			s.AddMessage(s.Deleted, testMessage(2))
+			cal := s.AddCalendarFolder(s.Top, "Calendar")
+			for i := 0; i < 5; i++ {
+				m := testMessage(i)
+				m.Appt = &Appointment{Start: m.Submit.Add(48 * time.Hour), End: m.Submit.Add(49 * time.Hour), Location: fmt.Sprintf("room%d", i)}
+				s.AddMessage(cal, m)
+			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}

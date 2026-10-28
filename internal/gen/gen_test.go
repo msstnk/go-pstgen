@@ -25,7 +25,10 @@ func TestPlanMessagesDateRange(t *testing.T) {
 			t.Fatalf("n = %d", n)
 		}
 		var minTS, maxTS time.Time
-		for _, l := range plan {
+		for fi, l := range plan {
+			if folderNames[fi] == calendarFolder {
+				continue // meetings are covered by TestSampleMeeting
+			}
 			for i, p := range l {
 				if p.ts.Before(start) || p.ts.After(end) {
 					t.Fatalf("days=%d: %v outside [%v, %v]", days, p.ts, start, end)
@@ -195,6 +198,48 @@ func TestCheckDuplicates(t *testing.T) {
 	for _, l := range dup {
 		if err := checkDuplicates(l); err == nil {
 			t.Errorf("%v: expected duplicate error", l)
+		}
+	}
+}
+
+func TestSampleMeeting(t *testing.T) {
+	end := time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)
+	for _, ahead := range []int{0, 14} {
+		cfg := config.Default()
+		cfg.End = end
+		cfg.RangeDays = 30
+		cfg.CalendarDaysAhead = ahead
+		lo, hi := end.Add(-30*24*time.Hour), end.Add(time.Duration(ahead)*24*time.Hour)
+		rng := rand.New(rand.NewSource(1))
+		const n = 20000
+		count := map[time.Duration]int{}
+		var maxStart time.Time
+		for range n {
+			start, dur, created := sampleMeeting(rng, cfg)
+			if start.Before(lo) || start.After(hi) {
+				t.Fatalf("ahead=%d: start %v outside [%v, %v]", ahead, start, lo, hi)
+			}
+			if start.Minute()%30 != 0 || start.Second() != 0 || start.Hour() < 1 || start.Hour() > 23 || (start.Hour() == 23 && start.Minute() > 0) {
+				t.Fatalf("start %v is not a half-hour slot between 01:00 and 23:00", start)
+			}
+			if end := start.Add(dur); end.After(start.Truncate(24 * time.Hour).Add(24 * time.Hour)) {
+				t.Fatalf("meeting %v+%v crosses midnight", start, dur)
+			}
+			if created.After(end) || !created.Before(start) {
+				t.Fatalf("created %v must be before start %v and end_date %v", created, start, end)
+			}
+			count[dur]++
+			if start.After(maxStart) {
+				maxStart = start
+			}
+		}
+		for d, want := range map[time.Duration]float64{30 * time.Minute: 0.3, 60 * time.Minute: 0.65, 120 * time.Minute: 0.05} {
+			if got := float64(count[d]) / n; math.Abs(got-want) > 0.02 {
+				t.Errorf("ahead=%d: %v ratio = %.3f, want about %.2f", ahead, d, got, want)
+			}
+		}
+		if ahead > 0 && maxStart.Before(end.Add(time.Duration(ahead-2)*24*time.Hour)) {
+			t.Errorf("ahead=%d: no meeting near the end of the future window (latest %v)", ahead, maxStart)
 		}
 	}
 }

@@ -61,6 +61,8 @@ func generate(cfg config.Config, c *corpus, j job) error {
 					return fmt.Errorf("parent folder %q of %q must come before it in folderNames", parent, name)
 				}
 				folders[name] = s.AddPlainFolder(pf, name)
+			case name == calendarFolder:
+				folders[name] = s.AddCalendarFolder(s.Top, name)
 			case name == recoverableRoot:
 				folders[name] = s.AddPlainFolder(s.Top, name)
 			default:

@@ -27,6 +27,9 @@ func TestLoadConfigDateDefaults(t *testing.T) {
 	if cfg.RangeDays != 365 {
 		t.Errorf("RangeDays = %d, want 365", cfg.RangeDays)
 	}
+	if cfg.CalendarDaysAhead != 14 {
+		t.Errorf("CalendarDaysAhead = %d, want 14", cfg.CalendarDaysAhead)
+	}
 	if cfg.End.Before(before) || cfg.End.After(time.Now().UTC()) {
 		t.Errorf("end = %v, want the current time", cfg.End)
 	}
@@ -80,6 +83,7 @@ func TestLoadConfigValidation(t *testing.T) {
 		{"holds below 0", `{"holds_ratio":-0.1}`},
 		{"log variance zero", `{"mailbox_log_variance":0}`},
 		{"log variance negative", `{"mailbox_log_variance":-0.5}`},
+		{"calendar days negative", `{"calendar_days_ahead":-1}`},
 		{"bad crypt", `{"crypt_method":"rot13"}`},
 	}
 	for _, tt := range tests {

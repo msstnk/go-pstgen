@@ -20,7 +20,7 @@ The repository also ships a second tool, [`go-pstprune`](#go-pstprune), which cu
 **Features**
 
 - Pure Go, no CGO. One binary for Linux and one for Windows.
-- Purview-style folders: `Inbox`, `Sent Items`, `Deleted Items`, `Recoverable-Items` (hyphenated, as Purview names it) with `Deletions`, `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds`.
+- Purview-style folders: `Inbox`, `Sent Items`, `Deleted Items`, `Calendar` (meetings), `Recoverable-Items` (hyphenated, as Purview names it) with `Deletions`, `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds`.
 - Mailbox sizes follow a normal (or log-normal) distribution and message sizes a log-normal one, with optional attachments.
 - Files are split into `<UPN>.pst`, `<UPN>-2.pst`, ... when they get too big.
 - Parallel workers, so 100 mailboxes finish in seconds.
@@ -140,6 +140,7 @@ Leave a key out and you get the default from the table below. A key that doesn't
 | `holds_ratio` | `1.0` | Fraction of mailboxes (0.0-1.0) that have the hold folders `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds` (holds are in effect). The other mailboxes get no such folders, and their share of messages is spread over the other folders |
 | `end_date` | `""` (run time) | Latest message date. RFC 3339 (`2026-03-31T12:00:00Z`) or `YYYY-MM-DD` (end of that day, UTC). If empty, the run time is used |
 | `range_days` | `365` | Messages are dated uniformly within this many days before `end_date` (at least 1) |
+| `calendar_days_ahead` | `14` | Meetings in `Calendar` start between `range_days` days before and this many days after `end_date` (0 or more) |
 | `split_size_mb` | `10240` | Maximum size of one PST file (MB). Output moves to the next file once the limit is expected to be exceeded. If 0 or less, files are not split |
 
 The defaults are tuned to work as they are: `mean_size_kb`, `attachment_ratio` and `mailbox_*` are normally all you need to touch. The body and attachment size keys (`body_mean_kb`, `body_log_variance`, `log_variance`) are for fine-tuning only.
@@ -201,9 +202,10 @@ Fane so rhet idatin wos ce lerath nod ah. Tre orsen ...
 
 ```
 Top of Personal Folders
-├── Inbox              38%
-├── Sent Items         24%
-├── Deleted Items      15%
+├── Inbox              36%
+├── Sent Items         22%
+├── Deleted Items      14%
+├── Calendar            5%
 └── Recoverable-Items   (no messages of its own)
     ├── Deletions       8%
     ├── Purges          5%
@@ -214,7 +216,9 @@ Top of Personal Folders
 
 `Deletions` is user-visible (Recover Deleted Items). `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds` are hidden from users and exist only on mailboxes under a hold; each mailbox gets them with probability `holds_ratio`. The ones that don't get them simply skip those folders, and the other weights scale up to fill the gap.
 
-Each message lands in a random folder according to the weights above, and inside a folder the messages are sorted oldest first.
+Each message lands in a random folder according to the weights above, and inside a folder the messages are sorted oldest first (`Calendar`: by start time).
+
+`Calendar` (`IPF.Appointment`) holds single, non-recurring meetings (`IPM.Appointment`, shown as busy) organized by the sender, with To / Cc as the attendees. Each starts on the half hour between 01:00 and 23:00 UTC and ends by midnight; the length is 30, 60 or 120 minutes (30% / 65% / 5%). The location is a random string. The size, subject, body, people and attachments follow the same rules as mail, and the item is created 1 hour to 14 days before it starts (never after `end_date`).
 
 **Splitting**
 

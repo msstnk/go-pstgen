@@ -14,7 +14,7 @@ import (
 // Purview names the Recoverable Items root with a hyphen, and imports it as a system folder only when the name matches.
 const recoverableRoot = "Recoverable-Items"
 
-var folderNames = []string{"Inbox", "Sent Items", "Deleted Items", recoverableRoot, "Deletions", "Purges", "Versions", "DiscoveryHolds", "SubstrateHolds"}
+var folderNames = []string{"Inbox", "Sent Items", "Deleted Items", calendarFolder, recoverableRoot, "Deletions", "Purges", "Versions", "DiscoveryHolds", "SubstrateHolds"}
 
 // holdFolders exist only in mailboxes with a hold (litigation hold, eDiscovery hold or retention policy) in effect.
 var holdFolders = []string{"Purges", "Versions", "DiscoveryHolds", "SubstrateHolds"}
@@ -26,12 +26,16 @@ var folderParents = map[string]string{
 }
 
 // Recoverable-Items itself holds no messages in Exchange; its subfolders do.
-var folderWeights = []int{38, 24, 15, 0, 8, 5, 4, 3, 3}
+var folderWeights = []int{36, 22, 14, 5, 0, 8, 5, 4, 3, 3}
 
 type planned struct {
 	ts     time.Time
 	body   int // body size in bytes (before UTF-16 conversion)
 	attach int // attachment size in bytes; 0 = no attachment
+
+	// Meetings (Calendar folder) only: ts is the start time, and dur the length (0 = not a meeting).
+	dur     time.Duration
+	created time.Time
 }
 
 // size is the value of PidTagMessageSize.
@@ -90,7 +94,10 @@ func planMessages(rng *rand.Rand, cfg config.Config, target int64, holds bool) (
 			fi++
 		}
 		ts := cfg.End.Add(-time.Duration(rng.Float64() * float64(cfg.RangeDays) * 86400 * float64(time.Second)))
-		p := planned{ts, body, attach}
+		p := planned{ts: ts, body: body, attach: attach}
+		if folderNames[fi] == calendarFolder {
+			p.ts, p.dur, p.created = sampleMeeting(rng, cfg)
+		}
 		plan[fi] = append(plan[fi], p)
 		total += int64(p.size())
 		n++
