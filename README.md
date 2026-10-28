@@ -218,7 +218,7 @@ Top of Personal Folders
 
 Each message lands in a random folder according to the weights above, and inside a folder the messages are sorted oldest first (`Calendar`: by start time).
 
-`Calendar` (`IPF.Appointment`) holds single, non-recurring meetings (`IPM.Appointment`, shown as busy) organized by the sender, with To / Cc as the attendees. Each starts on the half hour between 01:00 and 23:00 UTC and ends by midnight; the length is 30, 60 or 120 minutes (30% / 65% / 5%). The location is a random string. The size, subject, body, people and attachments follow the same rules as mail, and the item is created 1 hour to 14 days before it starts (never after `end_date`).
+`Calendar` (`IPF.Appointment`) holds single, non-recurring meetings (`IPM.Appointment`, shown as busy, already accepted) organized by the sender, with To / Cc as the attendees. Each starts on the half hour between 01:00 and 23:00 UTC and ends by midnight; the length is 30, 60 or 120 minutes (30% / 65% / 5%). The location is a random string. The size, subject, body, people and attachments follow the same rules as mail, and the item is created 1 hour to 14 days before it starts (never after `end_date`).
 
 **Splitting**
 

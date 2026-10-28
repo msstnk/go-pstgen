@@ -47,7 +47,12 @@ func buildMessage(rng *rand.Rand, c *corpus, p planned) *pst.Message {
 		Submit: when, Delivery: when, MessageID: msgID, Headers: headers,
 	}
 	if p.dur > 0 {
-		m.Appt = &pst.Appointment{Start: p.ts, End: p.ts.Add(p.dur), Location: randomString(rng, 6+rng.Intn(7))}
+		// Accepted within a day of being created, but before the meeting starts
+		reply := p.created.Add(time.Duration(rng.Float64() * float64(24*time.Hour)))
+		if reply.After(p.ts) {
+			reply = p.ts
+		}
+		m.Appt = &pst.Appointment{Start: p.ts, End: p.ts.Add(p.dur), Reply: reply, Location: randomString(rng, 6+rng.Intn(7))}
 	}
 	if attachBytes > 0 {
 		m.Attachments = []pst.Attachment{{Name: randomString(rng, 12) + ".attach", Data: c.attachData(rng, attachBytes)}}

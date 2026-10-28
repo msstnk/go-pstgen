@@ -25,6 +25,7 @@ const (
 	propCommonEnd      = 0x8028 // PidLidCommonEnd 0x8517 (PSETID_Common)
 	propApptDuration   = 0x8029 // PidLidAppointmentDuration 0x8213
 	propResponseStatus = 0x802A // PidLidResponseStatus 0x8218
+	propReplyTime      = 0x802B // PidLidAppointmentReplyTime 0x8220
 )
 
 // Indexes into the GUID stream of the empty PST (the wGuid field of an entry is index+3 shifted left by one).
@@ -49,6 +50,7 @@ var addedNames = []namedProp{
 	{0x8517, nameGUIDCommon, propCommonEnd},
 	{0x8213, nameGUIDAppointment, propApptDuration},
 	{0x8218, nameGUIDAppointment, propResponseStatus},
+	{0x8220, nameGUIDAppointment, propReplyTime},
 }
 
 // nameToIDNode builds the NameToIDMap node: the empty PST's map plus addedNames.

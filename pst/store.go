@@ -38,6 +38,7 @@ type Attachment struct {
 // Appointment makes a Message an IPM.Appointment (a meeting organized by Sender, with To/Cc as attendees).
 type Appointment struct {
 	Start, End time.Time
+	Reply      time.Time // when the meeting was accepted
 	Location   string
 }
 
@@ -383,7 +384,7 @@ func (s *Store) Close() error {
 // Abort closes an unfinished file.
 func (s *Store) Abort() { s.w.Abort() }
 
-// apptProps are the named properties of a single (non-recurring) meeting organized by the sender
+// apptProps are the named properties of a single (non-recurring) meeting organized by the sender and accepted,
 // that is shown as busy, with no reminder.
 func apptProps(a *Appointment) []Prop {
 	start, end := FileTime(a.Start), FileTime(a.End)
@@ -396,8 +397,9 @@ func apptProps(a *Appointment) []Prop {
 		PStr(propLocation, a.Location),
 		PInt32(propBusyStatus, 2), // olBusy
 		PBool(propRecurring, false), PBool(propApptSubType, false),
-		PInt32(propApptStateFlags, 1), // asfMeeting
-		PInt32(propResponseStatus, 1), // respOrganized
+		PInt32(propApptStateFlags, 3), // asfMeeting | asfReceived
+		PInt32(propResponseStatus, 3), // respAccepted
+		PTime(propReplyTime, FileTime(a.Reply)),
 		PBool(propReminderSet, false), PInt32(propReminderDelta, 15),
 	}
 }
