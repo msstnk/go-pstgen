@@ -3,7 +3,7 @@ package main
 import "runtime/debug"
 
 // version is the release version of go-pstprune (tag releases as v<version>).
-const version = "v0.1.4"
+const version = "v0.1.5"
 
 // versionString is the --version output: version plus the VCS commit id embedded by the Go toolchain,
 // suffixed "-dirty" for builds from a tree with uncommitted changes. Builds without VCS info (e.g. go install pkg@version) show the version only.
