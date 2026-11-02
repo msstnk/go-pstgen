@@ -85,6 +85,23 @@ It defaults to `--config config.json`, so you can omit the flag.
 bin/go-pstgen --config config.json
 ```
 
+| Option | Description |
+|---|---|
+| `--config` | JSON config file (default `config.json`) |
+| `--summary` | Where to write the item counts (default `summary.tsv`). Empty (`--summary ""`) turns it off |
+| `--init` | Write a minimal `config.json` and exit |
+
+### summary.tsv
+
+After generating, `go-pstgen` reads every PST it wrote back and writes the number of messages per folder, one `file<TAB>folder<TAB>count` line per folder (same format as `go-pstprune --count-items`). A mailbox split into `<UPN>-2.pst`, ... gets lines for each part. Folders without messages are left out, and a parent does not include its subfolders' messages.
+
+```
+output/user01@example.com.pst	Inbox	1100
+output/user01@example.com-2.pst	Sent Items	1212
+```
+
+If the summary file already exists, `go-pstgen` stops with an error **before** generating anything and never overwrites it. Delete or rename it, or pick another name with `--summary`. If some mailboxes fail, the summary still lists the PSTs that were written and the exit code is 1.
+
 ## go-pstprune
 
 `go-pstprune` cuts folders out of existing PST files. Purview exports almost always contain the hold area under `Recoverable-Items` (`Deletions`, `Purges`, `Versions`, `DiscoveryHolds`, `SubstrateHolds`, ...), and this is a pre-processing step to keep it from showing up after migration. It also works on the files `go-pstgen` generates, which makes it easy to try out.
@@ -100,6 +117,22 @@ go-pstprune --dry-run --file 'output/*.pst' --path 'Recoverable-Items/*'   # rep
 | `--path` | Folder path to prune. Repeatable; each segment is a case-insensitive glob |
 | `--no-fill` | Detach only; do not zero-fill the blocks |
 | `--dry-run` | Report what would be pruned without modifying anything |
+| `--count-items` | Print the number of items per folder as TSV and exit. Read-only; `--path` is ignored |
+
+### Counting items
+
+`--count-items` lists how many messages each folder holds, one `file<TAB>folder<TAB>count` line per folder, on standard output. Folders with no messages are left out, and a parent does not include its subfolders' messages (`Inbox/MyFav` counts only in `Inbox/MyFav`, not again in `Inbox`). Folders below `Top of Personal Folders` are shown relative to it; others (e.g. `Recoverable-Items`) from the root. Only messages are counted (no folder-associated items), and the files are never modified.
+
+```sh
+go-pstprune --count-items --file 'output/*.pst'
+```
+```
+output/user01@example.com.pst	Inbox	1100
+output/user01@example.com.pst	Sent Items	1212
+output/user01@example.com.pst	Recoverable-Items/Deletions	1111
+```
+
+### Pruning
 
 For every matching folder it:
 

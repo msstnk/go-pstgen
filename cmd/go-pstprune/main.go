@@ -27,9 +27,10 @@ func main() {
 	flag.Var(&paths, "path", "folder path to prune, e.g. 'Recoverable-Items/*' (repeatable; segments are case-insensitive globs)")
 	noFill := flag.Bool("no-fill", false, "only detach the nodes from the NBT; do not zero-fill their blocks")
 	dryRun := flag.Bool("dry-run", false, "report what would be pruned without modifying any file")
+	countItems := flag.Bool("count-items", false, "print the number of items per folder as TSV (file, folder, count) and exit; read-only, --path is ignored")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() {
-		fmt.Fprint(flag.CommandLine.Output(), credit, "\nUsage:\n  go-pstprune --file output/*.pst --path \"Recoverable-Items/*\" [--no-fill] [--dry-run]\n\nFiles are modified in place.\n\nOptions:\n")
+		fmt.Fprint(flag.CommandLine.Output(), credit, "\nUsage:\n  go-pstprune --file output/*.pst --path \"Recoverable-Items/*\" [--no-fill] [--dry-run]\n  go-pstprune --count-items --file output/*.pst\n\nFiles are modified in place.\n\nOptions:\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -39,7 +40,7 @@ func main() {
 	}
 	// An unquoted glob is expanded by the shell, so the files after the first one arrive as positional arguments.
 	files = append(files, flag.Args()...)
-	if len(files) == 0 || len(paths) == 0 {
+	if len(files) == 0 || (len(paths) == 0 && !*countItems) {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -57,6 +58,23 @@ func main() {
 	}
 
 	failed := 0
+	if *countItems {
+		for _, file := range targets {
+			counts, err := pst.CountItems(file)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s: %v\n", file, err)
+				failed++
+				continue
+			}
+			for _, c := range counts {
+				fmt.Printf("%s\t%s\t%d\n", file, c.Path, c.Count)
+			}
+		}
+		if failed > 0 {
+			os.Exit(1)
+		}
+		return
+	}
 	for _, file := range targets {
 		res, err := pst.Prune(file, pst.PruneOptions{Paths: paths, NoFill: *noFill, DryRun: *dryRun})
 		switch {

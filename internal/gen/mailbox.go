@@ -15,12 +15,12 @@ import (
 	"github.com/msstnk/go-pstgen/pst"
 )
 
-// generate writes one mailbox (split across several PST files if needed).
-func generate(cfg config.Config, c *corpus, j job) error {
+// generate writes one mailbox (split across several PST files if needed) and returns the paths of the files written.
+func generate(cfg config.Config, c *corpus, j job) ([]string, error) {
 	rng := rand.New(rand.NewSource(j.seed))
 	tag := "[" + j.user + "]"
 	if err := ensureDir(cfg.OutputDir); err != nil {
-		return err
+		return nil, err
 	}
 
 	plan, n, total := planMessages(rng, cfg, j.target, j.holds)
@@ -37,6 +37,7 @@ func generate(cfg config.Config, c *corpus, j job) error {
 		part    int
 		inPart  int
 		folders map[string]*pst.Folder
+		written []string
 	)
 	open := func() error {
 		part++
@@ -81,11 +82,12 @@ func generate(cfg config.Config, c *corpus, j job) error {
 			return err
 		}
 		fmt.Printf("%s done: %s (%d MB, %d messages)\n", tag, path, st.Size()/1024/1024, inPart)
+		written = append(written, path)
 		return nil
 	}
 
 	if err := open(); err != nil {
-		return err
+		return nil, err
 	}
 	done := 0
 	for fi, name := range folderNames {
@@ -93,10 +95,10 @@ func generate(cfg config.Config, c *corpus, j job) error {
 			// If adding this would exceed the split size, move to the next file (the first message is always kept)
 			if splitBytes > 0 && inPart > 0 && s.EstimatedSize()+int64(p.size()) > splitBytes {
 				if err := finish(); err != nil {
-					return err
+					return nil, err
 				}
 				if err := open(); err != nil {
-					return err
+					return nil, err
 				}
 			}
 			s.AddMessage(folders[name], buildMessage(rng, c, p))
@@ -107,7 +109,10 @@ func generate(cfg config.Config, c *corpus, j job) error {
 			}
 		}
 	}
-	return finish()
+	if err := finish(); err != nil {
+		return nil, err
+	}
+	return written, nil
 }
 
 // sanitize strips Windows-reserved characters and trailing dots/spaces so the result is usable as a file name.
@@ -157,13 +162,14 @@ type job struct {
 }
 
 // Run generates every mailbox in cfg using a pool of cfg.Workers workers.
-// It returns an error if the mailbox list is invalid or any mailbox failed.
-func Run(cfg config.Config) error {
+// It returns the paths of the PST files written (in mailbox order, then split order) and an error if the mailbox list
+// is invalid or any mailbox failed. The files of a mailbox that failed are not listed.
+func Run(cfg config.Config) ([]string, error) {
 	if len(cfg.Mailboxes) == 0 {
-		return fmt.Errorf("mailboxes is empty")
+		return nil, fmt.Errorf("mailboxes is empty")
 	}
 	if err := checkDuplicates(cfg.Mailboxes); err != nil {
-		return err
+		return nil, err
 	}
 
 	seed := time.Now().UnixNano()
@@ -186,7 +192,8 @@ func Run(cfg config.Config) error {
 	workers := max(1, min(cfg.Workers, len(jobs)))
 	fmt.Printf("%d mailboxes, %d workers\n", len(jobs), workers)
 
-	ch := make(chan job)
+	ch := make(chan int)
+	written := make([][]string, len(jobs))
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	completed := 0
@@ -194,27 +201,34 @@ func Run(cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := range ch {
-				if err := generate(cfg, corp, j); err != nil {
+			for i := range ch {
+				j := jobs[i]
+				files, err := generate(cfg, corp, j)
+				if err != nil {
 					fmt.Printf("[%s] FAILED: %v\n", j.user, err)
 					continue
 				}
+				written[i] = files
 				mu.Lock()
 				completed++
 				mu.Unlock()
 			}
 		}()
 	}
-	for _, j := range jobs {
-		ch <- j
+	for i := range jobs {
+		ch <- i
 	}
 	close(ch)
 	wg.Wait()
 	fmt.Printf("completed %d/%d mailboxes\n", completed, len(jobs))
-	if completed != len(jobs) {
-		return fmt.Errorf("%d of %d mailboxes failed", len(jobs)-completed, len(jobs))
+	var files []string
+	for _, w := range written {
+		files = append(files, w...)
 	}
-	return nil
+	if completed != len(jobs) {
+		return files, fmt.Errorf("%d of %d mailboxes failed", len(jobs)-completed, len(jobs))
+	}
+	return files, nil
 }
 
 // sampleMailboxSize draws a target mailbox size in bytes: normal by default, or log-normal
