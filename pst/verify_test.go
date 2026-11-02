@@ -275,12 +275,6 @@ func (r *pstReader) newHN(name string, blocks [][]byte, subs map[uint32]Sub) *hn
 			r.errf("%s: HN block %d HNPAGEMAP overflows", name, i)
 			continue
 		}
-		for _, c := range b[end:] {
-			if c != 0 {
-				r.errf("%s: HN block %d has non-zero bytes after HNPAGEMAP", name, i)
-				break
-			}
-		}
 		offs := make([]uint16, n+1)
 		for k := range offs {
 			offs[k] = le.Uint16(b[pm+4+2*k:])
@@ -537,12 +531,11 @@ func (r *pstReader) checkNode(name string, nid uint32, data, sub uint64, top boo
 		case nidFolder, nidMessage, nidHierarchy, nidContents, nidAssoc:
 			mustHN = true
 		}
-	} else {
-		if nid&0x1F == 0x1F {
-			return ni // LTP internal data (values, row matrix) is verified from the referrer
-		}
-		mustHN = true
+	} else if nid&0x1F == 0x1F {
+		return ni // LTP internal data (values, row matrix) is verified from the referrer
 	}
+	// MS-PST does not require other subnodes to be HNs (nidType means nothing to the NDB layer; e.g. a file saved by Outlook has subnodes
+	// such as 0x881 that are not), so those are only checked when they are one.
 	if b := blocks[0]; len(b) < 4 || b[2] != 0xEC {
 		if mustHN {
 			r.errf("%s: expected Heap-on-Node", name)
