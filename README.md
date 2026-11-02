@@ -148,6 +148,7 @@ Files are modified **in place**, so work on copies. Notes:
 - Blocks still referenced by a node you keep are never touched. Files with no match are skipped (exit code 0); any other error makes the exit code 1.
 - `--dry-run` reports what would be pruned without writing. The root and the top-level folder cannot be pruned.
 - The AMap and the file size are left as they are, so the file does not shrink. Unicode PST (wVer 23) only.
+- Verification is limited (see [Tested environments](#tested-environments)). Importing pruned files with a migration tool is not verified, so test the pruned output in your target environment before relying on it.
 
 ## config.json
 
@@ -303,7 +304,10 @@ Each message lands in a random folder according to the weights above, and inside
 | Importing the generated files in the Outlook for Microsoft 365 client | Verified |
 | Microsoft Purview (PST import) | Not verified yet |
 | `go-pstprune` output passes the repository's strict PST verifier (generated files and an Outlook-created PST) | Verified |
-| `go-pstprune` output opened in the Outlook client or imported by a migration tool | Not verified yet |
+| A 1 GB `go-pstprune` output opened and closed in the Outlook client (one file) | Verified |
+| `go-pstprune` output imported by a migration tool | Not verified yet |
+
+The verifier in this repository checks the files go-pstgen generates, an Outlook-created reference PST and, once, a pruned file that Outlook had opened and saved. Passing it does not mean Outlook or a migration tool will accept the file. Outlook's own output also departs from the letter of the spec in places (for example, the padding after HNPAGEMAP can exceed the 0 to 63 bytes the spec describes), so the verifier does not enforce rules the spec does not state. It checks conformance as this project reads the spec, not acceptance by every consumer.
 
 Tried it with another migration tool? PRs and issue reports are welcome.
 
