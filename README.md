@@ -25,7 +25,8 @@ The repository also ships a second tool, [`go-pstprune`](#go-pstprune), which cu
 - Files are split into `<UPN>.pst`, `<UPN>-2.pst`, ... when they get too big.
 - Parallel workers, so 100 mailboxes finish in seconds.
 - Set a `seed` and you get the same output every time (with the same version of the tool).
-- `go-pstprune`: detach folders (e.g. `Recoverable-Items/*`) from real PST files in place and zero-fill their data.
+- Reads the generated PSTs back and writes the number of messages per folder and per file to `summary.tsv` (see [summary.tsv](#summarytsv)).
+- `go-pstprune`: detach folders (e.g. `Recoverable-Items/*`) from real PST files in place and zero-fill their data, or just count the messages per folder (`--count-items`).
 
 [MS-PST]: https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/
 
