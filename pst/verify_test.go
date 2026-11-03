@@ -112,7 +112,7 @@ func (r *pstReader) walk(ib uint64, ptype byte, level int) {
 		case lvl > 0:
 			cib := le.Uint64(e[16:])
 			r.walk(cib, ptype, lvl-1)
-			if cib+pageSize <= uint64(len(r.b)) && r.b[cib+489-1+0] == r.b[cib+488] && int(r.b[cib+488]) > 0 {
+			if cib+pageSize <= uint64(len(r.b)) && r.b[cib+488] > 0 /* cEnt */ {
 				if ck := le.Uint64(r.b[cib:]); ck != key {
 					r.errf("page @%#x: btkeyMin %#x, child @%#x starts at %#x", ib, key, cib, ck)
 				}

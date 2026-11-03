@@ -357,8 +357,12 @@ func buildPCSized(props []Prop, sc *subCtx, sizeTag uint16, size func(heapBytes 
 	out := h.finish(hdrHid)
 	if sizeRec >= 0 {
 		n := 0
-		for _, b := range out {
-			n += len(b)
+		for i, b := range out {
+			if i < len(out)-1 {
+				n += blockMax // putChunks zero-pads every block but the last to blockMax, and dataBytes counts that
+			} else {
+				n += len(b)
+			}
 		}
 		per := maxHeapItem / (pcKeySize + pcEntSize)
 		leaf := leaves[sizeRec/per]
