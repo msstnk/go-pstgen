@@ -123,6 +123,11 @@ func Create(path, displayName string, key []byte, bufSize int, crypt CryptMethod
 	if err != nil {
 		return nil, err
 	}
+	return createOn(w, displayName, key), nil
+}
+
+// createOn builds a Store with the fixed folders on an existing Writer.
+func createOn(w *Writer, displayName string, key []byte) *Store {
 	w.nextIdx[nidFolder] = 0x405 // nidIndex 0x401..0x404 are taken by the fixed folders below (NIDs 0x8022..0x8082)
 	s := &Store{w: w, name: displayName}
 	copy(s.recKey[:], key)
@@ -136,7 +141,7 @@ func Create(path, displayName string, key []byte, bufSize int, crypt CryptMethod
 	sr.verbatim, sp.verbatim, cv.verbatim = true, true, true
 	s.Deleted = s.newFolder(s.Top, 0x8062, "Deleted Items", "")
 	s.Deleted.comment = "Deleted Items folder"
-	return s, nil
+	return s
 }
 
 func (s *Store) newFolder(parent *Folder, nid uint32, name, class string) *Folder {

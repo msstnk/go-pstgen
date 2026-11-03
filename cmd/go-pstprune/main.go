@@ -8,11 +8,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/msstnk/go-pstgen/internal/buildinfo"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/msstnk/go-pstgen/internal/buildinfo"
 	"github.com/msstnk/go-pstgen/pst"
 )
 
@@ -22,35 +23,45 @@ type listFlag []string
 func (l *listFlag) String() string     { return strings.Join(*l, ",") }
 func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 
-func main() {
+func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
+
+// run is main with its inputs and outputs made explicit; it returns the exit status.
+func run(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("go-pstprune", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	var files, paths listFlag
-	flag.Var(&files, "file", "PST file or glob, e.g. 'output/*.pst' (repeatable; extra arguments are treated as files too)")
-	flag.Var(&paths, "path", "folder path to prune, e.g. 'Recoverable-Items/*' (repeatable; segments are case-insensitive globs)")
-	noFill := flag.Bool("no-fill", false, "only detach the nodes from the NBT; do not zero-fill their blocks")
-	dryRun := flag.Bool("dry-run", false, "report what would be pruned without modifying any file")
-	countItems := flag.Bool("count-items", false, "print the number of items per folder as TSV (file, folder, count) and exit; read-only, --path is ignored")
-	showVersion := flag.Bool("version", false, "print the version and exit")
-	flag.Usage = func() {
-		fmt.Fprint(flag.CommandLine.Output(), credit, "\nUsage:\n  go-pstprune --file output/*.pst --path \"Recoverable-Items/*\" [--no-fill] [--dry-run]\n  go-pstprune --count-items --file output/*.pst\n\nFiles are modified in place.\n\nOptions:\n")
-		flag.PrintDefaults()
+	fs.Var(&files, "file", "PST file or glob, e.g. 'output/*.pst' (repeatable; extra arguments are treated as files too)")
+	fs.Var(&paths, "path", "folder path to prune, e.g. 'Recoverable-Items/*' (repeatable; segments are case-insensitive globs)")
+	noFill := fs.Bool("no-fill", false, "only detach the nodes from the NBT; do not zero-fill their blocks")
+	dryRun := fs.Bool("dry-run", false, "report what would be pruned without modifying any file")
+	countItems := fs.Bool("count-items", false, "print the number of items per folder as TSV (file, folder, count) and exit; read-only, --path is ignored")
+	showVersion := fs.Bool("version", false, "print the version and exit")
+	fs.Usage = func() {
+		fmt.Fprint(fs.Output(), credit, "\nUsage:\n  go-pstprune --file output/*.pst --path \"Recoverable-Items/*\" [--no-fill] [--dry-run]\n  go-pstprune --count-items --file output/*.pst\n\nFiles are modified in place.\n\nOptions:\n")
+		fs.PrintDefaults()
 	}
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
 	if *showVersion {
-		fmt.Println("go-pstprune", buildinfo.String(version))
-		return
+		fmt.Fprintln(stdout, "go-pstprune", buildinfo.String(version))
+		return 0
 	}
 	// An unquoted glob is expanded by the shell, so the files after the first one arrive as positional arguments.
-	files = append(files, flag.Args()...)
+	files = append(files, fs.Args()...)
 	if len(files) == 0 || (len(paths) == 0 && !*countItems) {
-		flag.Usage()
-		os.Exit(2)
+		fs.Usage()
+		return 2
 	}
 	var targets []string
 	for _, pat := range files {
 		m, err := filepath.Glob(pat)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "bad --file pattern %q: %v\n", pat, err)
-			os.Exit(2)
+			fmt.Fprintf(stderr, "bad --file pattern %q: %v\n", pat, err)
+			return 2
 		}
 		if len(m) == 0 {
 			m = []string{pat} // let the open fail with a proper message
@@ -63,43 +74,44 @@ func main() {
 		for _, file := range targets {
 			counts, err := pst.CountItems(file)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "%s: %v\n", file, err)
+				fmt.Fprintf(stderr, "%s: %v\n", file, err)
 				failed++
 				continue
 			}
 			for _, c := range counts {
-				fmt.Println(c.TSV(file))
+				fmt.Fprintln(stdout, c.TSV(file))
 			}
 		}
 		if failed > 0 {
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 	for _, file := range targets {
 		res, err := pst.Prune(file, pst.PruneOptions{Paths: paths, NoFill: *noFill, DryRun: *dryRun})
 		switch {
 		case errors.Is(err, pst.ErrNoMatch):
-			fmt.Printf("%s: no matching folder, skipped\n", file)
+			fmt.Fprintf(stdout, "%s: no matching folder, skipped\n", file)
 		case err != nil:
-			fmt.Fprintf(os.Stderr, "%s: %v\n", file, err)
+			fmt.Fprintf(stderr, "%s: %v\n", file, err)
 			failed++
 		default:
 			verb := "pruned"
 			if *dryRun {
 				verb = "would prune"
 			}
-			fmt.Printf("%s: %s %d folder(s) [%s] and %d loose item(s): %d nodes, %d table rows", file, verb, len(res.Folders), strings.Join(res.Folders, ", "), res.Items, res.Nodes, res.Rows)
+			fmt.Fprintf(stdout, "%s: %s %d folder(s) [%s] and %d loose item(s): %d nodes, %d table rows", file, verb, len(res.Folders), strings.Join(res.Folders, ", "), res.Items, res.Nodes, res.Rows)
 			if !*noFill {
-				fmt.Printf(", %d blocks (%.1f MiB) zero-filled", res.Blocks, float64(res.Bytes)/(1<<20))
+				fmt.Fprintf(stdout, ", %d blocks (%.1f MiB) zero-filled", res.Blocks, float64(res.Bytes)/(1<<20))
 			}
 			if res.Shared > 0 {
-				fmt.Printf(", %d shared blocks kept", res.Shared)
+				fmt.Fprintf(stdout, ", %d shared blocks kept", res.Shared)
 			}
-			fmt.Println()
+			fmt.Fprintln(stdout)
 		}
 	}
 	if failed > 0 {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

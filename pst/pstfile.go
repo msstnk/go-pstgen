@@ -18,6 +18,7 @@ const (
 // Node BTree and Block BTree reached from HEADER.root, and the blocks they locate.
 type File struct {
 	f       *os.File
+	size    uint64 // length of the file when it was opened; no block may lie beyond it
 	crypt   CryptMethod
 	nbt     *btree
 	bbt     *btree
@@ -42,7 +43,12 @@ func openPST(path string, rw bool) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
-	f := &File{f: osf, rw: rw}
+	fi, err := osf.Stat()
+	if err != nil {
+		osf.Close()
+		return nil, err
+	}
+	f := &File{f: osf, size: uint64(fi.Size()), rw: rw}
 	if err := f.load(); err != nil {
 		osf.Close()
 		return nil, fmt.Errorf("%s: %w", path, err)
@@ -317,6 +323,11 @@ func (f *File) blockRef(bid uint64) (blockRef, error) {
 	r := blockRef{ib: le.Uint64(e[8:]), cb: int(le.Uint16(e[16:]))}
 	if r.cb > blockMax {
 		return blockRef{}, fmt.Errorf("block %#x: cb %d too large", bid, r.cb)
+	}
+	// Prune zero-fills blocks at the position the BBT gives without reading them first, so a position outside the file
+	// has to be refused here, before anything is written.
+	if r.ib > f.size || r.total() > f.size-r.ib {
+		return blockRef{}, fmt.Errorf("block %#x: offset %#x lies outside the file", bid, r.ib)
 	}
 	return r, nil
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"os"
 	"sort"
 )
@@ -164,7 +165,8 @@ type Sub struct {
 
 // Writer is the NDB layer. Blocks are always appended to the end of the file, and B-Trees are built bottom-up in Finish.
 type Writer struct {
-	f              *os.File
+	f              file
+	path           string
 	bw             *bufio.Writer
 	off            uint64
 	nextMap        int
@@ -178,6 +180,14 @@ type Writer struct {
 	crypt          CryptMethod
 }
 
+// file is the part of *os.File that Writer uses; tests substitute one that fails.
+type file interface {
+	io.Writer
+	io.WriterAt
+	Truncate(size int64) error
+	Close() error
+}
+
 var zeroBuf [pageSize * 2]byte
 
 func NewWriter(path string, bufSize int, crypt CryptMethod) (*Writer, error) {
@@ -188,12 +198,17 @@ func NewWriter(path string, bufSize int, crypt CryptMethod) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	w := &Writer{f: f, bw: bufio.NewWriterSize(f, bufSize), blkIdx: 1, crypt: crypt}
+	return newWriter(f, path, bufSize, crypt), nil
+}
+
+// newWriter builds a Writer on an already opened file. path is what Abort removes.
+func newWriter(f file, path string, bufSize int, crypt CryptMethod) *Writer {
+	w := &Writer{f: f, path: path, bw: bufio.NewWriterSize(f, bufSize), blkIdx: 1, crypt: crypt}
 	for i := range w.nextIdx {
 		w.nextIdx[i] = nidStart(uint32(i)) + 1
 	}
 	w.zeros(firstMap) // header area (written back in Finish)
-	return w, nil
+	return w
 }
 
 // nidStart returns HEADER.rgnid's initial value (the last index allocated in a blank file) for NID type t.
@@ -593,5 +608,5 @@ func (w *Writer) Finish() error {
 // Abort closes the file and deletes it: after a failed Finish it is an incomplete PST.
 func (w *Writer) Abort() {
 	w.f.Close()
-	os.Remove(w.f.Name())
+	os.Remove(w.path)
 }
