@@ -73,7 +73,7 @@ const (
 	ptypeFPMap = 0x85
 	ptypeDList = 0x86
 
-	// DList page ([MS-PST] 2.2.2.7.4): placed one page before the first AMap, as in files written by Outlook.
+	// DList page ([MS-PST] 2.2.2.7.4 Density List): at most one, at absolute offset 0x4200 (one page before the first AMap).
 	dlistPos = firstMap - pageSize
 
 	// An AMap page's bid equals its file offset; BT page BIDs are a separate counter (HEADER.bidNextP, [MS-PST] 2.2.2.6)
@@ -132,25 +132,31 @@ const (
 
 var le = binary.LittleEndian
 
-// pstCRC is the MS-PST CRC-32 with initial value 0 and no final inversion.
+// pstCRC is the CRC-32 of [MS-PST] 5.3 (CRC Calculation): seed 0 and no final inversion. It covers a block's data
+// (without padding and trailer), a page up to its PAGETRAILER, and the two HEADER ranges.
 func pstCRC(b []byte) uint32 { return ^crc32.Update(0xFFFFFFFF, crc32.IEEETable, b) }
 
+// sig is wSig of a BLOCKTRAILER / PAGETRAILER ([MS-PST] 5.5 Block Signature): ib XOR bid, then the high and low 16 bits XORed.
+// Pages of type BBT, NBT and DList carry it; AMap, PMap, FMap and FPMap pages have wSig 0 ([MS-PST] 2.2.2.7.1).
 func sig(ib, bid uint64) uint16 {
 	v := uint32(ib ^ bid)
 	return uint16(v>>16) ^ uint16(v)
 }
 
+// bbtEnt is a BBTENTRY (leaf of the Block BTree, [MS-PST] 2.2.2.7.7.3): bid, its file offset, and cb (data size).
 type bbtEnt struct {
 	bid, ib uint64
 	cb      uint16
 }
 
+// nbtEnt is an NBTENTRY (leaf of the Node BTree, [MS-PST] 2.2.2.7.7.4): a node's data tree (bidData), subnode tree (bidSub)
+// and parent NID ([MS-PST] 2.2.2.7.7.4.1 Parent NID).
 type nbtEnt struct {
 	nid, parent uint32
 	data, sub   uint64
 }
 
-// Sub is one entry of the subnode B-Tree.
+// Sub is one entry of the subnode BTree: an SLENTRY ([MS-PST] 2.2.2.8.3.3.1.1).
 type Sub struct {
 	NID       uint32
 	Data, Sub uint64
@@ -226,6 +232,8 @@ func (w *Writer) zeros(n uint64) {
 }
 
 // emitMap reserves an AMap plus the PMap / FMap / FPMap that belong at that position, back to back (contents are written in Finish).
+// An AMap appears every mapSpan bytes ([MS-PST] 2.2.2.7.2) and a PMap with every eighth AMap ([MS-PST] 2.2.2.7.3). FMaps and FPMaps
+// are obsolete, but their positions must be kept ([MS-PST] 2.2.2.7.5, 2.2.2.7.6).
 func (w *Writer) emitMap() {
 	i := w.nextMap
 	w.amaps = append(w.amaps, w.off)
@@ -264,6 +272,8 @@ func (w *Writer) alloc(n, align uint64) uint64 {
 	}
 }
 
+// putBlock appends one block ([MS-PST] 2.2.2.8.2 Anatomy of a Block) and registers it in the BBT. Only the data of a non-internal
+// block is encoded ([MS-PST] 2.2.2.8.3.1.1); internal blocks (XBLOCK, XXBLOCK, SLBLOCK, SIBLOCK) are written as is.
 func (w *Writer) putBlock(data []byte, internal bool) uint64 {
 	return w.putBlockN(data, len(data), internal)
 }
@@ -299,6 +309,8 @@ func (w *Writer) putBlockN(data []byte, cb int, internal bool) uint64 {
 	return bid
 }
 
+// putX writes an XBLOCK (level 1, referencing data blocks) or an XXBLOCK (level 2, referencing XBLOCKs); total is its lcbTotal,
+// the bytes of external data below it ([MS-PST] 2.2.2.8.3.2.1, 2.2.2.8.3.2.2).
 func (w *Writer) putX(level byte, ids []uint64, total int) uint64 {
 	b := make([]byte, internalHdrSize+bidSize*len(ids))
 	b[0], b[1] = btypeXBlock, level
@@ -310,7 +322,7 @@ func (w *Writer) putX(level byte, ids []uint64, total int) uint64 {
 	return w.putBlock(b, true)
 }
 
-// putChunks writes a sequence of data blocks and returns the BID: the block itself for one, or one bundled by XBLOCK/XXBLOCK for several.
+// putChunks writes a data tree ([MS-PST] 2.2.2.8.3.2) and returns the BID: the block itself for one, or one bundled by XBLOCK/XXBLOCK for several.
 // Outlook locates positions in the data tree as "block number x blockMax", so every block but the last is zero-padded to blockMax.
 func (w *Writer) putChunks(chunks [][]byte) uint64 {
 	switch len(chunks) {
@@ -360,7 +372,7 @@ func split(b []byte) [][]byte {
 	return out
 }
 
-// putSubs writes the subnode B-Tree (SLBLOCK / SIBLOCK).
+// putSubs writes the subnode BTree ([MS-PST] 2.2.2.8.3.3): SLBLOCKs, plus one SIBLOCK above them if there are several.
 func (w *Writer) putSubs(subs []Sub) uint64 {
 	if len(subs) == 0 {
 		return 0
@@ -399,7 +411,7 @@ func (w *Writer) putSubs(subs []Sub) uint64 {
 	return w.putBlock(b, true)
 }
 
-// PutNode writes a node's data and subnodes and registers it in the NBT.
+// PutNode writes a node's data and subnodes and registers it in the NBT ([MS-PST] 2.2.2.7.7.4).
 func (w *Writer) PutNode(nid, parent uint32, chunks [][]byte, subs []Sub) {
 	data := w.putChunks(chunks)
 	sub := w.putSubs(subs)
@@ -408,6 +420,7 @@ func (w *Writer) PutNode(nid, parent uint32, chunks [][]byte, subs []Sub) {
 
 type btNode struct{ key, bid, ib uint64 }
 
+// putPage writes one BTPAGE ([MS-PST] 2.2.2.7.7.1) of the given ptype. Its BID comes from the bidNextP counter, not from the block BIDs.
 func (w *Writer) putPage(ptype byte, page []byte, cnt, cmax, cbEnt, level int) (bid, ib uint64) {
 	ib = w.alloc(pageSize, pageSize)
 	bid = w.pgNext
@@ -422,6 +435,7 @@ func (w *Writer) putPage(ptype byte, page []byte, cnt, cmax, cbEnt, level int) (
 	return
 }
 
+// buildBT builds a BTree bottom-up: leaf pages of n entries, then BTENTRY pages ([MS-PST] 2.2.2.7.7.2) level by level until one root is left.
 func (w *Writer) buildBT(ptype byte, n, entSize, maxEnt int, enc func(i int, dst []byte), key func(i int) uint64) btNode {
 	var cur []btNode
 	for i := 0; i < n || i == 0; i += maxEnt {
@@ -456,6 +470,7 @@ func (w *Writer) buildBT(ptype byte, n, entSize, maxEnt int, enc func(i int, dst
 }
 
 // Finish writes the NBT/BBT, AMap/PMap and header, and closes the file.
+// Layout: [MS-PST] 2.2.2.7 (pages), 2.2.2.6 (HEADER), 2.2.2.5 (ROOT).
 func (w *Writer) Finish() error {
 	// BIDs of BT pages are a separate series from block BIDs (sequential numbers above the blocks, following Outlook-created files)
 	w.pgNext = w.blkIdx<<bidIndexShift + pageBIDGap
@@ -484,6 +499,7 @@ func (w *Writer) Finish() error {
 		return err
 	}
 
+	// AMaps ([MS-PST] 2.2.2.7.2.1 AMAPPAGE): one bit per 64-byte unit, 1 = allocated. The tail of the last AMap beyond EOF counts as free.
 	var amapFree uint64
 	for _, pos := range w.amaps {
 		used := min(eof-pos, mapSpan)
@@ -500,7 +516,8 @@ func (w *Writer) Finish() error {
 			return err
 		}
 	}
-	// PMap / FMap / FPMap are obsolete. Fill them with all 0xFF bits, following Outlook-created files.
+	// PMap / FMap / FPMap are obsolete but must be present with valid CRCs ([MS-PST] 2.2.2.7.3, 2.2.2.7.5, 2.2.2.7.6).
+	// Fill them with all 0xFF bits, following Outlook-created files.
 	for _, m := range []struct {
 		ptype byte
 		pos   []uint64
@@ -519,7 +536,7 @@ func (w *Writer) Finish() error {
 		}
 	}
 
-	// DList page (dlistPos): empty body, trailer only
+	// DList page at dlistPos ([MS-PST] 2.2.2.7.4.2 DLISTPAGE): empty body, trailer only (the DList is optional, [MS-PST] 2.2.2.7.4).
 	dl := make([]byte, pageSize)
 	dl[pageTrailerOff], dl[pageTrailerOff+1] = ptypeDList, ptypeDList
 	le.PutUint16(dl[pageTrailerOff+trailerSigOff:], sig(dlistPos, dlistBid))
@@ -539,7 +556,7 @@ func (w *Writer) Finish() error {
 	for t := range nidTypeCount {
 		le.PutUint32(h[hdrNIDOff+4*t:], w.nextIdx[t]-1) // rgnid holds the last allocated index
 	}
-	root := h[hdrRootOff:]
+	root := h[hdrRootOff:] // ROOT ([MS-PST] 2.2.2.5): EOF, last AMap, free space, and the BREFs of the NBT / BBT roots
 	le.PutUint64(root[rootEofOff:], eof)
 	le.PutUint64(root[rootAMapLastOff:], w.amaps[len(w.amaps)-1])
 	le.PutUint64(root[rootAMapFreeOff:], amapFree)
@@ -550,11 +567,12 @@ func (w *Writer) Finish() error {
 	le.PutUint64(root[rootBBTOff+8:], bbtRoot.ib)
 	root[rootAMapValidOff] = validAMap2
 	for i := hdrFMOff; i < hdrSentinelOff; i++ {
-		h[i] = 0xFF // rgbFM / rgbFP (obsolete area)
+		h[i] = 0xFF // rgbFM / rgbFP: deprecated, MUST be filled with 0xFF ([MS-PST] 2.2.2.6)
 	}
 	h[hdrSentinelOff] = sentinel
 	h[hdrCryptOff] = byte(w.crypt)
 	le.PutUint64(h[hdrBidNextBOff:], w.blkIdx<<bidIndexShift)
+	// dwCRCFull covers 516 bytes and dwCRCPartial 471 bytes, both starting at wMagicClient ([MS-PST] 2.2.2.6)
 	le.PutUint32(h[hdrCRCFullOff:], pstCRC(h[hdrMagicClientOff:hdrCRCFullEnd]))
 	le.PutUint32(h[hdrCRCPartialOff:], pstCRC(h[hdrMagicClientOff:hdrCRCPartialEnd]))
 	if _, err := w.f.WriteAt(h, 0); err != nil {
