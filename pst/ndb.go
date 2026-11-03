@@ -176,6 +176,8 @@ type Writer struct {
 	bbt            []bbtEnt
 	nbt            []nbtEnt
 	nextIdx        [nidTypeCount]uint32
+	usedIdx        [nidTypeCount]uint32 // highest nidIndex seen per NID type among written nodes and subnodes
+	dataBytes      uint64               // total cb of the external (data) blocks written so far; internal blocks are not counted
 	scratch        []byte
 	crypt          CryptMethod
 }
@@ -231,6 +233,14 @@ func (w *Writer) NewNID(t uint32) uint32 {
 	i := w.nextIdx[t]
 	w.nextIdx[t]++
 	return i<<nidTypeBits | t
+}
+
+// noteNID records the nidIndex of a written node so that HEADER.rgnid is at least the highest index in use for each type
+// (ScanPST checks this; folder tables and subnodes take their NIDs without NewNID).
+func (w *Writer) noteNID(nid uint32) {
+	if i := nid >> nidTypeBits; i > w.usedIdx[nid&nidTypeMask] {
+		w.usedIdx[nid&nidTypeMask] = i
+	}
 }
 
 func (w *Writer) writeRaw(b []byte) {
@@ -324,6 +334,9 @@ func (w *Writer) putBlockN(data []byte, cb int, internal bool) uint64 {
 	le.PutUint64(t[trailerBIDOff:], bid)
 	w.writeRaw(b)
 	w.bbt = append(w.bbt, bbtEnt{bid, ib, uint16(cb)})
+	if !internal {
+		w.dataBytes += uint64(cb)
+	}
 	return bid
 }
 
@@ -396,6 +409,9 @@ func (w *Writer) putSubs(subs []Sub) uint64 {
 		return 0
 	}
 	sort.Slice(subs, func(i, j int) bool { return subs[i].NID < subs[j].NID })
+	for _, s := range subs {
+		w.noteNID(s.NID)
+	}
 	const per = (blockMax - internalHdrSize) / slEntSize
 	type ent struct{ nid, bid uint64 }
 	var leaves []ent
@@ -432,6 +448,7 @@ func (w *Writer) putSubs(subs []Sub) uint64 {
 // PutNode writes a node's data and subnodes and registers it in the NBT ([MS-PST] 2.2.2.7.7.4).
 // Each chunk must fit one block, at most blockMax (8,176) bytes, or it panics.
 func (w *Writer) PutNode(nid, parent uint32, chunks [][]byte, subs []Sub) {
+	w.noteNID(nid)
 	data := w.putChunks(chunks)
 	sub := w.putSubs(subs)
 	w.nbt = append(w.nbt, nbtEnt{nid: nid, parent: parent, data: data, sub: sub})
@@ -576,7 +593,7 @@ func (w *Writer) Finish() error {
 	le.PutUint64(h[hdrBidNextPOff:], w.pgNext)
 	le.PutUint32(h[hdrUniqueOff:], 1)
 	for t := range nidTypeCount {
-		le.PutUint32(h[hdrNIDOff+4*t:], w.nextIdx[t]-1) // rgnid holds the last allocated index
+		le.PutUint32(h[hdrNIDOff+4*t:], max(w.nextIdx[t]-1, w.usedIdx[t])) // rgnid holds the last allocated index
 	}
 	root := h[hdrRootOff:] // ROOT ([MS-PST] 2.2.2.5): EOF, last AMap, free space, and the BREFs of the NBT / BBT roots
 	le.PutUint64(root[rootEOFOff:], eof)

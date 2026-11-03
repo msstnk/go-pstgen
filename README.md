@@ -24,7 +24,7 @@ The repository also ships a second tool, [`go-pstprune`](#go-pstprune), which cu
 - Mailbox sizes follow a normal (or log-normal) distribution and message sizes a log-normal one, with optional attachments.
 - Files are split into `<UPN>.pst`, `<UPN>-2.pst`, ... when they get too big.
 - Parallel workers, so 100 mailboxes finish in seconds.
-- Set a `seed` and you get the same output every time (with the same version of the tool).
+- Set a `seed` and a fixed `end_date` and you get the same output every time (with the same version of the tool).
 - Reads the generated PSTs back and writes the number of messages per folder and per file to `summary.tsv` (see [summary.tsv](#summarytsv)).
 - `go-pstprune`: detach folders (e.g. `Recoverable-Items/*`) from real PST files in place and zero-fill their data, or just count the messages per folder (`--count-items`).
 
@@ -34,7 +34,7 @@ The repository also ships a second tool, [`go-pstprune`](#go-pstprune), which cu
 
 ## Install
 
-All you need is Go. No CGO. Install straight from GitHub, no clone required:
+All you need is Go 1.26 or later (`go.mod` requires `go 1.26.0`). No CGO. Install straight from GitHub, no clone required:
 
 ```sh
 go install github.com/msstnk/go-pstgen/cmd/go-pstgen@latest
@@ -47,7 +47,7 @@ The binaries land in `$(go env GOPATH)/bin` (or `$GOBIN` if set).
 
 ## Build
 
-Or build from a clone, one line per platform:
+Or build from a clone (Go 1.26 or later), one line per platform:
 
 ```sh
 # Linux
@@ -91,6 +91,9 @@ bin/go-pstgen --config config.json
 | `--config` | JSON config file (default `config.json`) |
 | `--summary` | Where to write the item counts (default `summary.tsv`). Empty (`--summary ""`) turns it off |
 | `--init` | Write a minimal `config.json` and exit |
+| `--version` | Print the version (with the commit id) and exit |
+
+Exit codes: `0` on success, `2` for a usage error (bad flags or arguments), `1` for any other error (a bad config, a failed mailbox, ...). `go-pstprune` uses the same codes.
 
 ### summary.tsv
 
@@ -118,7 +121,10 @@ go-pstprune --dry-run --file 'output/*.pst' --path 'Recoverable-Items/*'   # rep
 | `--path` | Folder path to prune. Repeatable; each segment is a case-insensitive glob |
 | `--no-fill` | Detach only; do not zero-fill the blocks |
 | `--dry-run` | Report what would be pruned without modifying anything |
-| `--count-items` | Print the number of items per folder as TSV and exit. Read-only; `--path` is ignored |
+| `--count-items` | Print the number of items per folder as TSV and exit. Read-only; `--path`, `--dry-run` and `--no-fill` are ignored |
+| `--version` | Print the version (with the commit id) and exit |
+
+Exit codes: `0` on success (including files with no match), `2` for a usage error, `1` for any other error.
 
 ### Counting items
 
@@ -145,7 +151,7 @@ Files are modified **in place**, so work on copies. Notes:
 
 - `--file` and `--path` can be repeated. `--file` takes globs, and extra arguments are treated as files, so an unquoted `output/*.pst` works too.
 - Each `--path` segment is a case-insensitive glob. Paths are tried from the root folder and from the top of the mailbox (`Top of Personal Folders`). A trailing `*` matches items as well as folders, like a file glob: `Recoverable-Items/*` prunes the subfolders and the messages directly in the folder, and keeps the (now empty) folder itself; `Recoverable-Items` prunes the folder too.
-- Blocks still referenced by a node you keep are never touched. Files with no match are skipped (exit code 0); any other error makes the exit code 1.
+- Blocks still referenced by a node you keep are never touched. Files with no match are skipped (exit code 0); any other error makes the exit code 1 (see the exit codes above).
 - `--dry-run` reports what would be pruned without writing. The root and the top-level folder cannot be pruned.
 - The blocks are zero-filled and dropped from the BBT, but the AMaps, `ROOT.cbAMapFree` and the density list are not updated, so the file does not shrink and the zeroed space still counts as allocated. Outlook opened and saved pruned files in this state (see [Tested environments](#tested-environments)) without reclaiming it; compacting the file in Outlook is the expected way to get the space back, but that is not verified here. `cRef` of blocks shared with a node you keep is not decremented, which can only over-count references.
 - Unicode PSTs only (wVer 23 or higher; ANSI files are rejected). Files with wVer 37, written by Outlook builds that support Windows Information Protection, are read like wVer 23, but data protected that way cannot be read, and no such file has been tested.
@@ -158,7 +164,7 @@ Leave a key out and you get the default from the table below. A key that doesn't
 | Key | Default | Description |
 |---|---|---|
 | `output_dir` | `"./output"` | Output directory. Files are written flat as `<output_dir>/<UPN>.pst` (`<UPN>-2.pst`, `<UPN>-3.pst` ... when split) |
-| `mailboxes` | `["user01@example.com"]` | List of UPNs of the mailboxes to generate (empty is an error) |
+| `mailboxes` | `["user01@example.com"]` | List of UPNs of the mailboxes to generate (empty is an error). A UPN is used as the file name after replacing `\ / : * ? " < > \|` and control characters with `_` and stripping trailing dots and spaces (an empty result becomes `_`), so such a UPN does not match its file name. Names that collide after this, or with a split suffix (`x` and `x-2`), are rejected |
 | `mailbox_mean_mb` | `1000` | Mean mailbox size in MB (greater than 0). A sampled size is clamped to between the larger of 10% of the mean and 1 MB, and 10 times the mean |
 | `mailbox_stddev_mb` | `200` | Standard deviation of the mailbox size (MB). Ignored when `mailbox_log_variance` is set |
 | `mailbox_log_variance` | `null` | If set (greater than 0), mailbox sizes follow a log-normal distribution with this log variance instead of the normal one: a long tail toward large mailboxes while the mean stays `mailbox_mean_mb` (`mailbox_stddev_mb` is ignored). Around `1.0`-`1.3` looks realistic, but the spread of file sizes gets wide, so handle with care. If `null`, the normal distribution is used |
@@ -171,7 +177,7 @@ Leave a key out and you get the default from the table below. A key that doesn't
 | `body_mean_kb` | `10` | Mean body size in KB. Must be smaller than `mean_size_kb` (ignored when `attachment_ratio` is 0, where the body takes the whole mean) |
 | `body_log_variance` | `1.0` | Log variance of the body size |
 | `attachment_ratio` | `0.3` | Fraction of messages with an attachment (0 to 1) |
-| `seed` | `null` | Random seed. If `null`, the current time is used. The same seed gives the same output only within one version; reproducibility across versions is not guaranteed |
+| `seed` | `null` | Random seed. If `null`, the current time is used. The same seed and the same `end_date` give the same output, only within one version (with the default empty `end_date`, message dates and meeting placement change with the run time); reproducibility across versions is not guaranteed |
 | `crypt_method` | `"permute"` | PST encryption method: `none` / `permute` / `cyclic` |
 | `holds_ratio` | `1.0` | Fraction of mailboxes (0.0-1.0) that have the hold folders `Purges`, `Versions`, `DiscoveryHolds` and `SubstrateHolds` (holds are in effect). The other mailboxes get no such folders, and their share of messages is spread over the other folders |
 | `end_date` | `""` (run time) | Latest message date. RFC 3339 (`2026-03-31T12:00:00Z`) or `YYYY-MM-DD` (end of that day, UTC). If empty, the run time is used |
@@ -204,6 +210,7 @@ Here's an example with every key set (everything except `mailboxes`, `workers` a
   "holds_ratio": 1.0,
   "end_date": "",
   "range_days": 365,
+  "calendar_days_ahead": 14,
   "split_size_mb": 10240
 }
 ```
@@ -265,9 +272,11 @@ Each message lands in a random folder according to the weights above, and inside
 
 - The target size of each mailbox is sampled from the normal distribution given by `mailbox_mean_mb` / `mailbox_stddev_mb`, or, if `mailbox_log_variance` is set, from a log-normal distribution with mean `mailbox_mean_mb`.
 - A message is a body plus, with probability `attachment_ratio`, one attachment. Both sizes are log-normal: the body has mean `body_mean_kb` and log variance `body_log_variance`; the attachment has log variance `log_variance` and a mean derived so that the expected message size is exactly `mean_size_kb`.
-- "Message size" is the value of `PidTagMessageSize`: 1024 + body bytes, plus attachment bytes + 512 when there is an attachment. The mean attachment size is therefore `(mean_size_kb − 1 KB − body_mean_kb) / attachment_ratio − 512 bytes`. For example, `mean_size_kb` 100, `body_mean_kb` 10 and `attachment_ratio` 0.1 give a mean attachment of about 890 KB (≈ 10 + 0.1 × 890 + 1 = 100).
+- "Message size" as planned is modelled on `PidTagMessageSize`: 1024 + body bytes, plus attachment bytes + 512 when there is an attachment. The mean attachment size is therefore `(mean_size_kb − 1 KB − body_mean_kb) / attachment_ratio − 512 bytes`. For example, `mean_size_kb` 100, `body_mean_kb` 10 and `attachment_ratio` 0.1 give a mean attachment of about 890 KB (≈ 10 + 0.1 × 890 + 1 = 100).
 - The total is clamped to `[min_size_kb, max_size_kb]`: an oversized message loses attachment bytes first, an undersized one gains body bytes.
 - **Notice:** the smaller `attachment_ratio` is, the larger the mean attachment gets (`mean_size_kb` 100 and `attachment_ratio` 0.03 means about 3 MB). The tail beyond `max_size_kb` is then cut, and the realized mean message size comes out *below* `mean_size_kb`. Raise `max_size_kb` or lower `log_variance` if you need the mean to hold.
+- The `PidTagMessageSize` actually written is the total length of the message's data blocks (the value ScanPST recomputes), so it is a few KB above the planned size for small messages. `PidTagAttachSize` of an attachment is the sum of the lengths of its property values (the attachment data plus about 200 bytes), again as ScanPST computes it.
+- Each message also carries `PidTagConversationId` (0x3013: MD5 of the upper-cased subject, as in MS-OXOMSG) and `PidTagPstBodyPrefix` (0x6619: the first 496 UTF-16 units of the body, trailing white space trimmed). Outlook computes both when it opens a file and writes them into its contents tables only, which ScanPST then reports as rows that do not match their messages; having them in the messages avoids that.
 - `PidTagMessageSize` is not the file size: each message takes roughly 5-7 KB more in the PST file (UTF-16 headers, tables, page and block overhead), and the mailbox size target is checked against `PidTagMessageSize` totals, so files come out a little larger than `mailbox_mean_mb` when messages are small.
 - If `total_messages` > 0, exactly that many messages are generated; otherwise messages are generated until the total size reaches the target size.
 
@@ -312,6 +321,15 @@ The verifier in this repository checks the files go-pstgen generates, an Outlook
 
 Tried it with another migration tool? PRs and issue reports are welcome.
 
+## Development
+
+```sh
+make test        # about 5 s
+make test-full   # also tries every damaged byte of the parsed structures (PST_CORRUPT_FULL=1), about 40 s; run it after changing a parser
+```
+
+The verifier's sanity check against a real Outlook-created PST needs one: set `PST_REF_FILE` to its path, or put it at `ref/ref_mailbox.pst`. Without it, those tests are skipped.
+
 ## Benchmark
 
 Here's what generating 100 mailboxes took, with a mean of 100 MB, a standard deviation of 20 MB and 8 workers.
@@ -353,7 +371,7 @@ A: You can ask, but unless your M&A team somehow negotiated a clause in the SPA 
 A: No. `go-pstgen` is built strictly for throughput benchmarking and API concurrency testing. It does not simulate corrupt PST structures, duplicate Message-IDs, malformed MIME parts, or nested calendar exceptions. Those delightful edge cases will remain safely hidden until 3:00 AM on cutover night, exactly as you anticipated.
 
 **Q: The email bodies are gibberish. Will our import tool reject them?**  
-A: No. Import tools parse byte counts, headers, and folder nodes, not literary prose. The binary structure adheres strictly to the MS-PST specification: valid UTF-16 encoding, legitimate MIME headers, and compliant node trees. Your migration tool will ingest them happily, and your DLP scanners will find absolutely nothing to report—unless the infinite monkey theorem kicks in and accidentally types out next quarter's board slides.
+A: No. Import tools parse byte counts, headers, and folder nodes, not literary prose. The binary structure follows the MS-PST specification as this project reads it (see [Tested environments](#tested-environments)): valid UTF-16 encoding, legitimate MIME headers, and compliant node trees. Your migration tool will ingest them happily, and your DLP scanners will find absolutely nothing to report—unless the infinite monkey theorem kicks in and accidentally types out next quarter's board slides.
 
 ## License
 

@@ -153,11 +153,17 @@ func hnReplace(b []byte, hid uint32, data []byte) ([]byte, error) {
 	pm := int(le.Uint16(b))
 	n := int(le.Uint16(b[pm:]))
 	delta := len(data) - (end - start)
-	out := make([]byte, 0, len(b)+delta)
+	last := int(le.Uint16(b[pm+4+2*n:])) // end of the last allocation; pm-last is 0 or 1 pad byte
+	newLast := last + delta
+	npm := (newLast + 1) &^ 1 // the HNPAGEMAP stays 2-byte aligned, as the builder lays it out
+	out := make([]byte, 0, npm+len(b)-pm)
 	out = append(out, b[:start]...)
 	out = append(out, data...)
-	out = append(out, b[end:]...)
-	npm := pm + delta
+	out = append(out, b[end:last]...)
+	for len(out) < npm {
+		out = append(out, 0)
+	}
+	out = append(out, b[pm:]...)
 	le.PutUint16(out, uint16(npm))
 	for j := idx; j <= n; j++ {
 		o := npm + 4 + 2*j
@@ -186,7 +192,7 @@ func (f *File) subnode(sub uint64, nid uint32) (uint64, bool, error) {
 		if b[1] == levelSLBlock {
 			for i := 0; i < n && internalHdrSize+slEntSize*(i+1) <= len(b); i++ {
 				if e := b[internalHdrSize+slEntSize*i:]; le.Uint64(e) == uint64(nid) {
-					return le.Uint64(e[8:]), true, nil
+					return bidRef(le.Uint64(e[8:])), true, nil
 				}
 			}
 			return 0, false, nil
@@ -196,7 +202,7 @@ func (f *File) subnode(sub uint64, nid uint32) (uint64, bool, error) {
 			if le.Uint64(b[internalHdrSize+siEntSize*i:]) > uint64(nid) {
 				break
 			}
-			next = le.Uint64(b[internalHdrSize+siEntSize*i+bidSize:])
+			next = bidRef(le.Uint64(b[internalHdrSize+siEntSize*i+bidSize:]))
 		}
 		sub = next
 	}

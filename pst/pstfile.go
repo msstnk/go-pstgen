@@ -237,6 +237,11 @@ func (t *btree) remove(del map[uint64]struct{}) bool {
 				continue
 			}
 			copy(p.buf[btIntEntSize*w:], p.buf[btIntEntSize*i:btIntEntSize*(i+1)])
+			// btkey is the smallest key under the child ([MS-PST] 2.2.2.7.7.2): removing the child's first entries raises it
+			if k := le.Uint64(p.kids[i].buf[:]); k != le.Uint64(p.buf[btIntEntSize*w:]) {
+				le.PutUint64(p.buf[btIntEntSize*w:], k)
+				p.dirty = true
+			}
 			p.kids[w] = p.kids[i]
 			w++
 		}
@@ -295,7 +300,7 @@ func (f *File) nbtEntries() []nbtEntry {
 
 // decodeNBT decodes an NBTENTRY {nid (8 bytes), bidData, bidSub, nidParent}.
 func decodeNBT(e []byte) nbtEntry {
-	return nbtEntry{nid: le.Uint32(e), data: le.Uint64(e[8:]), sub: le.Uint64(e[16:]), parent: le.Uint32(e[24:])}
+	return nbtEntry{nid: le.Uint32(e), data: bidRef(le.Uint64(e[8:])), sub: bidRef(le.Uint64(e[16:])), parent: le.Uint32(e[24:])}
 }
 
 func (f *File) node(nid uint32) (nbtEntry, bool) {
@@ -305,6 +310,11 @@ func (f *File) node(nid uint32) (nbtEntry, bool) {
 	}
 	return decodeNBT(p.buf[i*nbtEntSize:]), true
 }
+
+// bidRef clears bit 0 of a BID read from a reference (NBT entry, XBLOCK, SLBLOCK). The bit is reserved ([MS-PST] 2.2.2.2) and
+// Outlook / ScanPST set it in references while the BBT keys and block trailers have it clear (a file repaired by ScanPST has
+// XBLOCK entries such as 0x143c5 for the block whose BBT key is 0x143c4).
+func bidRef(b uint64) uint64 { return b &^ 1 }
 
 // blockRef locates a block: its offset and cb, the data size from its BBTENTRY ([MS-PST] 2.2.2.7.7.3).
 type blockRef struct {
@@ -423,7 +433,7 @@ func xblockKids(bid uint64, b []byte) ([]uint64, error) {
 	}
 	kids := make([]uint64, n)
 	for i := range kids {
-		kids[i] = le.Uint64(b[internalHdrSize+bidSize*i:])
+		kids[i] = bidRef(le.Uint64(b[internalHdrSize+bidSize*i:]))
 	}
 	return kids, nil
 }
@@ -483,10 +493,10 @@ func (f *File) walkSubAt(bid uint64, depth int, visit func(uint64)) error {
 		}
 		for i := 0; i < n; i++ {
 			e := b[internalHdrSize+slEntSize*i:]
-			if err := f.walkDataAt(le.Uint64(e[8:]), depth+1, visit); err != nil {
+			if err := f.walkDataAt(bidRef(le.Uint64(e[8:])), depth+1, visit); err != nil {
 				return err
 			}
-			if err := f.walkSubAt(le.Uint64(e[16:]), depth+1, visit); err != nil {
+			if err := f.walkSubAt(bidRef(le.Uint64(e[16:])), depth+1, visit); err != nil {
 				return err
 			}
 		}
@@ -496,7 +506,7 @@ func (f *File) walkSubAt(bid uint64, depth int, visit func(uint64)) error {
 		return fmt.Errorf("block %#x: truncated SIBLOCK", bid)
 	}
 	for i := 0; i < n; i++ {
-		if err := f.walkSubAt(le.Uint64(b[internalHdrSize+siEntSize*i+bidSize:]), depth+1, visit); err != nil {
+		if err := f.walkSubAt(bidRef(le.Uint64(b[internalHdrSize+siEntSize*i+bidSize:])), depth+1, visit); err != nil {
 			return err
 		}
 	}
