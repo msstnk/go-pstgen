@@ -42,7 +42,7 @@ func buildPrunable(t *testing.T, cm CryptMethod) string {
 func TestPrune(t *testing.T) {
 	for name, cm := range map[string]CryptMethod{"none": CryptNone, "permute": CryptPermute, "cyclic": CryptCyclic} {
 		for _, noFill := range []bool{false, true} {
-			t.Run(name, func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/noFill=%t", name, noFill), func(t *testing.T) {
 				p := buildPrunable(t, cm)
 				before, err := openPST(p, false)
 				if err != nil {
@@ -112,9 +112,7 @@ func TestPrune(t *testing.T) {
 				if zeroed != res.Blocks {
 					t.Errorf("%d blocks dropped from the BBT, result says %d", zeroed, res.Blocks)
 				}
-				if !noFill {
-					checkFile(t, p) // a pruned file must stay consistent for the strict verifier
-				}
+				checkFile(t, p) // a pruned file must stay consistent for the strict verifier
 			})
 		}
 	}

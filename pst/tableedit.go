@@ -42,6 +42,9 @@ func (f *File) loadHeap(data uint64) (*heapPages, error) {
 		}
 		h.xbid = data
 	}
+	if len(h.bids) == 0 {
+		return nil, fmt.Errorf("heap has no data blocks")
+	}
 	for _, b := range h.bids {
 		p, err := f.readBlock(b)
 		if err != nil {
@@ -59,13 +62,16 @@ func (h *heapPages) replace(hid uint32, data []byte) error {
 		return fmt.Errorf("HID %#x: no such heap page", hid)
 	}
 	p, err := hnReplace(h.pages[pg], hid, data)
+	if err != nil {
+		return err
+	}
 	h.pages[pg] = p
-	return err
+	return nil
 }
 
 // save stages the pages that changed. Every page but the last keeps its length (zero-padded), as Outlook finds
 // page i at offset i*blockMax; the XBLOCK total is updated.
-func (f *File) saveHeap(h *heapPages) {
+func (f *File) saveHeap(h *heapPages) error {
 	last := len(h.pages) - 1
 	if last < 8 && last >= 0 { // fill level of the last page (the earlier ones stay full)
 		sh := uint(4 * (last % 2))
@@ -83,10 +89,17 @@ func (f *File) saveHeap(h *heapPages) {
 		}
 	}
 	if h.xbid != 0 && changed {
-		xb, _ := f.readBlock(h.xbid)
+		xb, err := f.readBlock(h.xbid)
+		if err != nil {
+			return err
+		}
+		if len(xb) < internalHdrSize {
+			return fmt.Errorf("XBLOCK %#x is too short (%d bytes)", h.xbid, len(xb))
+		}
 		le.PutUint32(xb[4:], uint32(total))
 		f.stage(h.xbid, xb)
 	}
+	return nil
 }
 
 // clearPCValue zeroes an inline (boolean / integer) property of a folder's Property Context.
@@ -104,8 +117,7 @@ func (f *File) clearPCValue(nid uint32, tag uint16) error {
 		return err
 	}
 	le.PutUint32(h.pages[pg][off+4:], 0)
-	f.saveHeap(h)
-	return nil
+	return f.saveHeap(h)
 }
 
 // bthNode is a node of the BTree-on-Heap ([MS-PST] 2.3.2) of a TC's RowIndex ([MS-PST] 2.3.4.3: dwRowID -> dwRowIndex), here with 4-byte keys and values (4-byte keys and values) used by the table row index.
@@ -168,7 +180,10 @@ func (f *File) loadTable(e nbtEntry) (*tableInfo, error) {
 		return nil, fmt.Errorf("not a Table Context")
 	}
 	t := &tableInfo{h: h, infoHid: le.Uint32(b[4:])}
-	if t.info, err = hn.alloc(t.infoHid); err != nil || len(t.info) < tcInfoHdrSize || t.info[0] != clientSigTC {
+	if t.info, err = hn.alloc(t.infoHid); err != nil {
+		return nil, fmt.Errorf("bad TCINFO: %w", err)
+	}
+	if len(t.info) < tcInfoHdrSize || t.info[0] != clientSigTC {
 		return nil, fmt.Errorf("bad TCINFO")
 	}
 	t.rowSize = int(le.Uint16(t.info[tcRgibOff+2*tciBM:]))
@@ -177,7 +192,10 @@ func (f *File) loadTable(e nbtEntry) (*tableInfo, error) {
 	}
 	t.idxHid, t.rowsHnid = le.Uint32(t.info[tcRowIndexOff:]), le.Uint32(t.info[tcRowsOff:])
 	bth, err := hn.alloc(t.idxHid)
-	if err != nil || len(bth) < 8 || bth[0] != clientSigBTH || bth[1] != rowIdxKeySize || bth[2] != rowIdxEntSize {
+	if err != nil {
+		return nil, fmt.Errorf("bad row index BTH: %w", err)
+	}
+	if len(bth) < 8 || bth[0] != clientSigBTH || bth[1] != rowIdxKeySize || bth[2] != rowIdxEntSize {
 		return nil, fmt.Errorf("bad row index BTH")
 	}
 	if root := le.Uint32(bth[4:]); root != 0 {
@@ -200,8 +218,11 @@ func (f *File) loadMatrix(e nbtEntry, t *tableInfo) (*matrix, error) {
 		return nil, fmt.Errorf("row matrix HNID %#x is neither an HID nor an LTP subnode", t.rowsHnid)
 	}
 	dbid, ok, err := f.subnode(e.sub, t.rowsHnid)
-	if err != nil || !ok {
-		return nil, fmt.Errorf("row matrix subnode %#x not found: %v", t.rowsHnid, err)
+	if err != nil {
+		return nil, fmt.Errorf("row matrix subnode %#x: %w", t.rowsHnid, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("row matrix subnode %#x not found", t.rowsHnid)
 	}
 	m := &matrix{kids: []uint64{dbid}}
 	if dbid&bidInternal != 0 {
@@ -224,7 +245,7 @@ func (f *File) loadMatrix(e nbtEntry, t *tableInfo) (*matrix, error) {
 	return m, nil
 }
 
-// removeTableRows removes the rows whose RowID is in ids from the Table Context of node e (a hierarchy table).
+// removeTableRows removes the rows whose RowID is in ids from the Table Context of node e (a hierarchy, contents or FAI contents table).
 // The heap may span several blocks and the row index may have several levels; the row matrix may be in the heap or in
 // a subnode (single block or one XBLOCK). The edit is staged; the BIDs of blocks that are no longer used are returned.
 func (f *File) removeTableRows(e nbtEntry, ids map[uint32]bool) (removed int, drop []uint64, err error) {
@@ -363,7 +384,9 @@ func (f *File) removeTableRows(e nbtEntry, ids map[uint32]bool) (removed int, dr
 			f.stage(mx.xbid, xb)
 		}
 	}
-	f.saveHeap(t.h)
+	if err := f.saveHeap(t.h); err != nil {
+		return 0, nil, err
+	}
 	return removed, drop, nil
 }
 
@@ -413,7 +436,7 @@ func (f *File) clearTableCell(e nbtEntry, rowID uint32, tag, typ uint16) error {
 			return err
 		}
 		if exists(row) && clearBytes(row[ibData:ibData+cb]) {
-			f.saveHeap(t.h)
+			return f.saveHeap(t.h)
 		}
 		return nil
 	}

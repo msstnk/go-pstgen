@@ -29,8 +29,8 @@ type PruneResult struct {
 	Shared  int      // blocks kept because a retained node still references them
 }
 
-// A Folder object is four nodes that share one nidIndex and differ only in nidType: the folder PC and its hierarchy, contents and
-// FAI contents tables ([MS-PST] 2.4.4 Folders). Prune derives a folder's table NIDs from its NID that way.
+// A Folder object is five nodes that share one nidIndex and differ only in nidType: the folder PC and its hierarchy, contents,
+// FAI contents and search contents tables ([MS-PST] 2.4.4 Folders). Prune derives a folder's table NIDs from its NID that way.
 var (
 	rootNID     = uint32(nidRootFolder)
 	tableTypes  = []uint32{nidHierarchy, nidContents, nidAssoc, nidSearchContents}
@@ -45,7 +45,7 @@ type matched struct {
 // Prune detaches every folder matching opt.Paths, with all subfolders, messages and their tables, from the NBT of the
 // PST at filePath. Unless opt.NoFill is set, the blocks only those nodes used are filled with 0x00 and dropped from the BBT.
 // The matched folders are also removed from their parents' hierarchy tables. The file is modified in place.
-func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
+func Prune(filePath string, opt PruneOptions) (out *PruneResult, retErr error) {
 	pats, err := splitPaths(opt.Paths)
 	if err != nil {
 		return nil, err
@@ -54,7 +54,12 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.close()
+	defer func() {
+		// a failed close of a file we edited means the edit may not have reached the disk
+		if err := f.close(); err != nil && retErr == nil {
+			out, retErr = nil, err
+		}
+	}()
 
 	entries := f.nbtEntries()
 	byParent := map[uint32][]nbtEntry{}

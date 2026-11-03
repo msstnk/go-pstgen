@@ -81,7 +81,7 @@ const (
 	// that is not tied to the block BIDs. pageBIDGap is where this writer starts it above the block BIDs.
 	pageBIDGap = 0x10
 
-	// NBTENTRY / BBTENTRY fields ([MS-PST] 2.2.2.7.7.3, 2.2.2.7.7.4). A block's cRef counts the BBTENTRY plus
+	// BBTENTRY / NBTENTRY fields ([MS-PST] 2.2.2.7.7.3, 2.2.2.7.7.4). A block's cRef counts the BBTENTRY plus
 	// the one NBTENTRY.bidData / bidSub / SLENTRY / XBLOCK slot that references it ([MS-PST] 2.2.2.7.7.3.1).
 	bbtRefCount = 2
 
@@ -488,7 +488,8 @@ func (w *Writer) buildBT(ptype byte, n, entSize, maxEnt int, enc func(i int, dst
 	return cur[0]
 }
 
-// Finish writes the NBT/BBT, AMap/PMap and header, and closes the file.
+// Finish writes the NBT/BBT, AMap/PMap and header, and closes the file. If it returns an error the file is an incomplete PST
+// and still open: call Abort.
 // Layout: [MS-PST] 2.2.2.7 (pages), 2.2.2.6 (HEADER), 2.2.2.5 (ROOT).
 func (w *Writer) Finish() error {
 	// BIDs of BT pages are a separate series from block BIDs (sequential numbers above the blocks, following Outlook-created files)

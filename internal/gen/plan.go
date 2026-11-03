@@ -2,6 +2,7 @@
 package gen
 
 import (
+	"cmp"
 	"math"
 	"math/rand"
 	"slices"
@@ -103,7 +104,15 @@ func planMessages(rng *rand.Rand, cfg config.Config, target int64, holds bool) (
 		n++
 	}
 	for _, l := range plan {
-		slices.SortFunc(l, func(a, b planned) int { return a.ts.Compare(b.ts) })
+		slices.SortFunc(l, func(a, b planned) int {
+			if c := a.ts.Compare(b.ts); c != 0 {
+				return c
+			}
+			if c := cmp.Compare(a.dur, b.dur); c != 0 { // equal start times occur in Calendar; keep the order reproducible
+				return c
+			}
+			return cmp.Compare(a.size(), b.size())
+		})
 	}
 	return plan, n, total
 }

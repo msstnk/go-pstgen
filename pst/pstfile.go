@@ -61,7 +61,10 @@ func (f *File) close() error { return f.f.Close() }
 // load validates the HEADER ([MS-PST] 2.2.2.6: dwMagic, wVer, both CRCs, bCryptMethod) and loads the BBT and NBT from ROOT.
 func (f *File) load() error {
 	h := make([]byte, headerSize)
-	if _, err := f.f.ReadAt(h, 0); err != nil || string(h[:4]) != pstMagic {
+	if _, err := f.f.ReadAt(h, 0); err != nil {
+		return fmt.Errorf("not a PST file: reading the header: %w", err)
+	}
+	if string(h[:4]) != pstMagic {
 		return fmt.Errorf("not a PST file")
 	}
 	// Unicode PSTs have wVer >= 23 ([MS-PST] 2.2.2.6); 14 and 15 are ANSI. 37 is written by an Outlook that supports Windows

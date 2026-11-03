@@ -45,9 +45,12 @@ func WriteSummary(path string, files []string) error {
 	for _, r := range rows {
 		w.WriteString(r)
 	}
-	if err := w.Flush(); err != nil {
-		f.Close()
-		return err
+	err = w.Flush()
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	return f.Close()
+	if err != nil {
+		os.Remove(path) // a partial file would make a retry fail with "already exists"
+	}
+	return err
 }
