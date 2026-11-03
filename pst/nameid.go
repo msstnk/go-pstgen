@@ -5,7 +5,8 @@ import (
 	"sort"
 )
 
-// Property IDs assigned to named properties. The first ones are in the NameToIDMap of the empty PST (nameid_base.go);
+// Property IDs assigned to named properties: 0x8000 plus wPropIdx of the NAMEID record ([MS-PST] 2.4.7.1). The comments give each
+// property's name and long ID (LID) as defined in [MS-OXPROPS]; names, LIDs and property sets were checked against it. The first ones are in the NameToIDMap of the empty PST (nameid_base.go);
 // the ones from propLocation are appended by nameToIDNode, so the IDs must stay in this order.
 const (
 	// PSETID_Appointment
@@ -28,13 +29,16 @@ const (
 	propReplyTime      = 0x802B // PidLidAppointmentReplyTime 0x8220
 )
 
-// Indexes into the GUID stream of the empty PST (the wGuid field of an entry is index+3 shifted left by one).
+// Indexes into the GUID stream of the empty PST ([MS-PST] 2.4.7.2). A NAMEID's wGuid is the index plus 3 ([MS-PST] 2.4.7.1; values
+// 1 and 2 are the well-known PS_MAPI and PS_PUBLIC_STRINGS), and the 16-bit field holding it is wGuid<<1 | N with N = 0 for the
+// numeric names used here.
 const (
 	nameGUIDAppointment = 0 // 00062002-0000-0000-C000-000000000046
 	nameGUIDCommon      = 2 // 00062008-0000-0000-C000-000000000046
 )
 
-// namedProp is a numeric named property added to the empty PST's NameToIDMap.
+// namedProp is a numeric named property added to the empty PST's NameToIDMap: a NAMEID with N = 0, whose dwPropertyID is the LID
+// ([MS-PST] 2.4.7.1).
 type namedProp struct {
 	lid  uint32
 	guid int
@@ -53,7 +57,10 @@ var addedNames = []namedProp{
 	{0x8220, nameGUIDAppointment, propReplyTime},
 }
 
-// nameToIDNode builds the NameToIDMap node: the empty PST's map plus addedNames.
+// nameToIDNode builds the Name-to-ID map ([MS-PST] 2.4.7): a PC whose properties are not real properties but the streams of the map.
+// 0x0001 PidTagNameidBucketCount (251), 0x0002 PidTagNameidStreamGuid, 0x0003 PidTagNameidStreamEntry, 0x0004 PidTagNameidStreamString,
+// and one binary property per used hash bucket from PidTagNameidBucketBase 0x1000 ([MS-PST] 2.4.7.5). The map is the empty PST's
+// plus addedNames.
 func nameToIDNode(sc *subCtx) [][]byte {
 	entries := mustHex(nameIDEntries)
 	buckets := map[uint16][]byte{}
@@ -69,6 +76,8 @@ func nameToIDNode(sc *subCtx) [][]byte {
 		le.PutUint16(rec[4:], wGuid)
 		le.PutUint16(rec[6:], n.id-0x8000)
 		entries = append(entries, rec[:]...)
+		// Bucket = (dwPropertyID ^ low 16 bits of the second DWORD of the NAMEID) % bucket count ([MS-PST] 2.4.7.5). For a numeric
+		// name the bucket record is the NAMEID itself.
 		tag := uint16(0x1000 + (n.lid^uint32(wGuid))%nameIDBuckets)
 		if _, ok := buckets[tag]; !ok {
 			tags = append(tags, tag)

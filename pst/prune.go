@@ -29,9 +29,11 @@ type PruneResult struct {
 	Shared  int      // blocks kept because a retained node still references them
 }
 
+// A Folder object is four nodes that share one nidIndex and differ only in nidType: the folder PC and its hierarchy, contents and
+// FAI contents tables ([MS-PST] 2.4.4 Folders). Prune derives a folder's table NIDs from its NID that way.
 var (
 	rootNID     = uint32(nidRootFolder)
-	tableTypes  = []uint32{nidHierarchy, nidContents, nidAssoc, 0x10}
+	tableTypes  = []uint32{nidHierarchy, nidContents, nidAssoc, nidSearchContents}
 	errUnpruned = errors.New("refusing to prune")
 )
 
@@ -61,7 +63,7 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 		if e.parent != 0 && e.parent != e.nid {
 			byParent[e.parent] = append(byParent[e.parent], e)
 		}
-		if e.nid&0x1F == nidFolder {
+		if e.nid&nidTypeMask == nidFolder {
 			parentOf[e.nid] = e.parent
 		}
 	}
@@ -97,7 +99,7 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 				}
 				for _, c := range cur {
 					for _, e := range byParent[c.nid] {
-						if e.nid&0x1F != nidFolder {
+						if e.nid&nidTypeMask != nidFolder {
 							continue
 						}
 						if ok, _ := path.Match(seg, strings.ToLower(name(e.nid))); ok {
@@ -138,15 +140,14 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 
 	// ---- everything under the matched folders ----
 	gone := map[uint32]nbtEntry{} // detached nodes
-	byNID := func(nid uint32) (nbtEntry, bool) { return f.node(nid) }
 	var addFolder func(nid uint32)
 	addFolder = func(nid uint32) {
 		for _, t := range tableTypes {
-			if e, ok := byNID(nid&^0x1F | t); ok {
+			if e, ok := f.node(nid&^nidTypeMask | t); ok {
 				gone[e.nid] = e
 			}
 		}
-		if e, ok := byNID(nid); ok {
+		if e, ok := f.node(nid); ok {
 			gone[e.nid] = e
 		}
 		for _, c := range byParent[nid] {
@@ -154,7 +155,7 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 				continue
 			}
 			gone[c.nid] = c
-			if c.nid&0x1F == nidFolder {
+			if c.nid&nidTypeMask == nidFolder {
 				addFolder(c.nid)
 			}
 		}
@@ -177,17 +178,17 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 			continue
 		}
 		for _, c := range byParent[p] {
-			if _, ok := gone[c.nid]; ok || c.nid&0x1F == nidFolder || c.nid&0x1F == 0x03 {
+			if _, ok := gone[c.nid]; ok || c.nid&nidTypeMask == nidFolder || c.nid&nidTypeMask == nidSearchFolder {
 				continue
 			}
 			gone[c.nid] = c
 			res.Items++
 			emptiedItems[p] = true
-			switch c.nid & 0x1F {
+			switch c.nid & nidTypeMask {
 			case nidMessage:
-				addRow(p&^0x1F|nidContents, c.nid)
-			case 0x08: // folder-associated message
-				addRow(p&^0x1F|nidAssoc, c.nid)
+				addRow(p&^nidTypeMask|nidContents, c.nid)
+			case nidAssocMessage:
+				addRow(p&^nidTypeMask|nidAssoc, c.nid)
 			}
 		}
 	}
@@ -198,31 +199,32 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 
 	// ---- table rows of the parents ----
 	for _, nid := range tops {
-		addRow(parentOf[nid]&^0x1F|nidHierarchy, nid)
+		addRow(parentOf[nid]&^nidTypeMask|nidHierarchy, nid)
 	}
 	var dropped []uint64
 	for t, ids := range rowsByTable {
-		e, ok := byNID(t)
+		e, ok := f.node(t)
 		if !ok || e.data == 0 {
 			continue
 		}
 		n, drop, err := f.removeTableRows(e, ids)
 		if err != nil {
-			return nil, fmt.Errorf("%s: table %#x: %w", filePath, t, err)
+			return nil, fmt.Errorf("table %#x: %w", t, err)
 		}
 		dropped = append(dropped, drop...)
 		res.Rows += n
 	}
 	// Folders that lost all their items have a content count of zero: fix the folder properties and the folder's row
-	// in its parent's hierarchy table.
+	// in its parent's hierarchy table (the counts are duplicated in both, [MS-PST] 2.4.4.3 Data Duplication and Coherency Maintenance).
 	for p := range emptiedItems {
-		for _, tag := range []uint16{0x3602, 0x3603, 0x3617} { // content count, unread count, FAI count
+		hier, hasHier := f.node(parentOf[p]&^nidTypeMask | nidHierarchy)
+		for _, tag := range []uint16{pidContentCount, pidContentUnread, pidAssocContent} {
 			if err := f.clearPCValue(p, tag); err != nil {
-				return nil, fmt.Errorf("%s: folder %#x: %w", filePath, p, err)
+				return nil, fmt.Errorf("folder %#x: %w", p, err)
 			}
-			if e, ok := byNID(parentOf[p]&^0x1F | nidHierarchy); ok && e.data != 0 && p != rootNID {
-				if err := f.clearTableCell(e, p, tag, PtLong); err != nil {
-					return nil, fmt.Errorf("%s: hierarchy table of %#x: %w", filePath, parentOf[p], err)
+			if hasHier && hier.data != 0 && p != rootNID {
+				if err := f.clearTableCell(hier, p, tag, PtLong); err != nil {
+					return nil, fmt.Errorf("hierarchy table of %#x: %w", parentOf[p], err)
 				}
 			}
 		}
@@ -239,22 +241,22 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 		}
 		kept := false
 		for _, c := range byParent[p] {
-			if _, ok := gone[c.nid]; !ok && c.nid&0x1F == nidFolder {
+			if _, ok := gone[c.nid]; !ok && c.nid&nidTypeMask == nidFolder {
 				kept = true
 			}
 		}
 		if kept {
 			continue
 		}
-		if err := f.clearPCValue(p, 0x360A); err != nil {
-			return nil, fmt.Errorf("%s: folder %#x: %w", filePath, p, err)
+		if err := f.clearPCValue(p, pidSubfolders); err != nil {
+			return nil, fmt.Errorf("folder %#x: %w", p, err)
 		}
 		if p == rootNID {
 			continue
 		}
-		if e, ok := byNID(parentOf[p]&^0x1F | nidHierarchy); ok && e.data != 0 {
-			if err := f.clearTableCell(e, p, 0x360A, PtBool); err != nil {
-				return nil, fmt.Errorf("%s: hierarchy table of %#x: %w", filePath, parentOf[p], err)
+		if e, ok := f.node(parentOf[p]&^nidTypeMask | nidHierarchy); ok && e.data != 0 {
+			if err := f.clearTableCell(e, p, pidSubfolders, PtBool); err != nil {
+				return nil, fmt.Errorf("hierarchy table of %#x: %w", parentOf[p], err)
 			}
 		}
 	}
@@ -263,7 +265,7 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 	cand := map[uint64]struct{}{}
 	for _, e := range gone {
 		if err := f.walkNode(e, func(b uint64) { cand[b] = struct{}{} }); err != nil {
-			return nil, fmt.Errorf("%s: node %#x: %w", filePath, e.nid, err)
+			return nil, fmt.Errorf("node %#x: %w", e.nid, err)
 		}
 	}
 	for _, e := range entries {
@@ -277,7 +279,7 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 			}
 		})
 		if err != nil {
-			return nil, fmt.Errorf("%s: node %#x: %w", filePath, e.nid, err)
+			return nil, fmt.Errorf("node %#x: %w", e.nid, err)
 		}
 	}
 	for _, b := range dropped { // matrix blocks released by the table rewrite
@@ -289,7 +291,7 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 		for bid := range cand {
 			r, err := f.blockRef(bid)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", filePath, err)
+				return nil, err
 			}
 			zero = append(zero, r)
 			delBlocks[bid] = struct{}{}
@@ -308,27 +310,27 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 		delNodes[uint64(nid)] = struct{}{}
 	}
 	if !f.nbt.remove(delNodes) || !f.bbt.remove(delBlocks) {
-		return nil, fmt.Errorf("%s: pruning would empty a B-Tree", filePath)
+		return nil, errors.New("pruning would empty a B-Tree")
 	}
 	for bid, data := range f.pending {
 		if err := f.writeBlock(bid, data); err != nil {
-			return nil, fmt.Errorf("%s: %w", filePath, err)
+			return nil, err
 		}
 	}
 	for _, r := range zero {
 		if err := f.zero(r.ib, r.total()); err != nil {
-			return nil, fmt.Errorf("%s: %w", filePath, err)
+			return nil, err
 		}
 	}
 	// BBT first, then NBT last: until the NBT page is rewritten the old tree still resolves.
 	if err := f.flush(f.bbt, !opt.NoFill); err != nil {
-		return nil, fmt.Errorf("%s: %w", filePath, err)
+		return nil, err
 	}
 	if err := f.flush(f.nbt, !opt.NoFill); err != nil {
-		return nil, fmt.Errorf("%s: %w", filePath, err)
+		return nil, err
 	}
 	if err := f.f.Sync(); err != nil {
-		return nil, fmt.Errorf("%s: %w", filePath, err)
+		return nil, err
 	}
 	return res, nil
 }
@@ -365,7 +367,7 @@ func (f *File) ipmSubtree() uint32 {
 	if err != nil {
 		return 0
 	}
-	b, ok, err := h.pcBytes(0x35E0) // PidTagIpmSubTreeEntryId
+	b, ok, err := h.pcBytes(pidIpmSubTreeEID) // PidTagIpmSubTreeEntryId; bytes 20..23 of an EntryID are the NID ([MS-PST] 2.4.3.2 Mapping between EntryID and NID)
 	if err != nil || !ok || len(b) < 24 {
 		return 0
 	}

@@ -17,6 +17,13 @@ var domains = []string{
 
 const wordPoolSize = 200000
 
+// Trigram table: letters a-z are 0..25 and pad (26) is both the word-start padding and the end-of-word symbol.
+const (
+	pad           = 26
+	trigramSyms   = pad + 1
+	trigramStates = trigramSyms * trigramSyms // (a, b) pairs
+)
+
 // letterFallback is used only when a word start state has no data (never with a real dictionary).
 var letterFallback = []int{
 	817, 149, 278, 425, 1270, 223, 202, 609, 697, 15, 77, 403, 241,
@@ -29,7 +36,7 @@ var letterFallback = []int{
 var wordLenWeights = []int{30, 170, 200, 160, 110, 85, 75, 55, 40, 30, 20, 12, 7, 4, 2}
 
 // trigramCum is trigramCounts as cumulative tables; states that never occur are nil.
-var trigramCum = func() (t [27 * 27][]int) {
+var trigramCum = func() (t [trigramStates][]int) {
 	for s, row := range trigramCounts {
 		w := make([]int, len(row))
 		for i, v := range row {
@@ -60,7 +67,6 @@ func cumulative(w []int) []int {
 // randomWords generates n pseudo-words. The length follows wordLenWeights, and each letter is sampled from the two
 // letters before it (a trigram model of English). The last letter is chosen among those that can end a word.
 func randomWords(rng *rand.Rand, n int) []string {
-	const pad = 26
 	lenCum := cumulative(wordLenWeights)
 	words := make([]string, n)
 	buf := make([]byte, len(wordLenWeights))
@@ -68,7 +74,7 @@ func randomWords(rng *rand.Rand, n int) []string {
 		l := weightedPick(rng, lenCum) + 1
 		a, b, j := pad, pad, 0
 		for ; j < l; j++ {
-			cum := trigramCum[a*27+b]
+			cum := trigramCum[a*trigramSyms+b]
 			var c int
 			if j == l-1 {
 				c = pickLast(rng, a, b)
@@ -87,12 +93,11 @@ func randomWords(rng *rand.Rand, n int) []string {
 
 // pickLast picks a final letter after a, b, weighting each candidate by how often it follows a, b and then ends a word.
 func pickLast(rng *rand.Rand, a, b int) int {
-	const pad = 26
-	row := trigramCounts[a*27+b]
+	row := trigramCounts[a*trigramSyms+b]
 	w := make([]int, pad)
 	total := 0
 	for c := range w {
-		w[c] = int(row[c]) * int(trigramCounts[b*27+c][pad])
+		w[c] = int(row[c]) * int(trigramCounts[b*trigramSyms+c][pad])
 		total += w[c]
 	}
 	if total == 0 { // no known ending: fall back to any letter that can follow

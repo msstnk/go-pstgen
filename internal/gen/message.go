@@ -17,7 +17,6 @@ func buildMessage(rng *rand.Rand, c *corpus, p planned) *pst.Message {
 
 	// The body is stored as UTF-16, so the character count is half the target byte count
 	body := c.body(rng, p.body/2)
-	attachBytes := p.attach
 
 	var id [16]byte
 	rng.Read(id[:])
@@ -48,14 +47,14 @@ func buildMessage(rng *rand.Rand, c *corpus, p planned) *pst.Message {
 	}
 	if p.dur > 0 {
 		// Accepted within a day of being created, but before the meeting starts
-		reply := p.created.Add(time.Duration(rng.Float64() * float64(24*time.Hour)))
+		reply := p.created.Add(time.Duration(rng.Float64() * float64(fullDay)))
 		if reply.After(p.ts) {
 			reply = p.ts
 		}
 		m.Appt = &pst.Appointment{Start: p.ts, End: p.ts.Add(p.dur), Reply: reply, Location: randomString(rng, 6+rng.Intn(7))}
 	}
-	if attachBytes > 0 {
-		m.Attachments = []pst.Attachment{{Name: randomString(rng, 12) + ".attach", Data: c.attachData(rng, attachBytes)}}
+	if p.attach > 0 {
+		m.Attachments = []pst.Attachment{{Name: randomString(rng, 12) + ".attach", Data: c.attachData(rng, p.attach)}}
 	}
 	return m
 }

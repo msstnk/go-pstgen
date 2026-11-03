@@ -15,11 +15,21 @@ import (
 	"github.com/msstnk/go-pstgen/pst"
 )
 
+const (
+	bytesPerMB = 1024 * 1024
+
+	progressEvery = 1000 // messages between progress lines
+
+	// A sampled mailbox size is clamped to [max(minMailboxFrac x mean, 1 MB), maxMailboxFactor x mean].
+	minMailboxFrac   = 0.1
+	maxMailboxFactor = 10
+)
+
 // generate writes one mailbox (split across several PST files if needed) and returns the paths of the files written.
 func generate(cfg config.Config, c *corpus, j job) ([]string, error) {
 	rng := rand.New(rand.NewSource(j.seed))
 	tag := "[" + j.user + "]"
-	if err := ensureDir(cfg.OutputDir); err != nil {
+	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		return nil, err
 	}
 
@@ -28,7 +38,7 @@ func generate(cfg config.Config, c *corpus, j job) ([]string, error) {
 
 	var key [16]byte
 	rng.Read(key[:])
-	splitBytes := int64(cfg.SplitSizeMB * 1024 * 1024)
+	splitBytes := int64(cfg.SplitSizeMB * bytesPerMB)
 
 	// Create the same folder layout for each split file
 	var (
@@ -104,7 +114,7 @@ func generate(cfg config.Config, c *corpus, j job) ([]string, error) {
 			s.AddMessage(folders[name], buildMessage(rng, c, p))
 			inPart++
 			done++
-			if done%1000 == 0 {
+			if done%progressEvery == 0 {
 				fmt.Printf("%s  %d/%d\n", tag, done, n)
 			}
 		}
@@ -143,8 +153,6 @@ func checkDuplicates(mailboxes []string) error {
 	return nil
 }
 
-func ensureDir(p string) error { return os.MkdirAll(p, 0o755) }
-
 // outPath returns the path of the part-th (1-based) split file.
 func outPath(cfg config.Config, user string, part int) string {
 	name := sanitize(user)
@@ -182,7 +190,7 @@ func Run(cfg config.Config) ([]string, error) {
 	// Decide the target size and seed up front (reproducible via seed regardless of parallel execution order)
 	jobs := make([]job, len(cfg.Mailboxes))
 	for i, u := range cfg.Mailboxes {
-		mean := cfg.MailboxMeanMB * 1024 * 1024
+		mean := cfg.MailboxMeanMB * bytesPerMB
 		t := sampleMailboxSize(master, cfg)
 		j := job{user: u, seed: master.Int63(), target: clampMailboxSize(t, mean)}
 		// No random draw when the ratio is 1 so existing seeded output is unchanged
@@ -234,16 +242,16 @@ func Run(cfg config.Config) ([]string, error) {
 // sampleMailboxSize draws a target mailbox size in bytes: normal by default, or log-normal
 // (long right tail, same mean) when mailbox_log_variance is set.
 func sampleMailboxSize(rng *rand.Rand, cfg config.Config) float64 {
-	mean := cfg.MailboxMeanMB * 1024 * 1024
+	mean := cfg.MailboxMeanMB * bytesPerMB
 	z := rng.NormFloat64()
 	if cfg.MailboxLogVariance == nil {
-		return z*cfg.MailboxStddevMB*1024*1024 + mean
+		return z*cfg.MailboxStddevMB*bytesPerMB + mean
 	}
 	v := *cfg.MailboxLogVariance
 	return math.Exp(math.Log(mean) - v/2 + math.Sqrt(v)*z)
 }
 
-// clampMailboxSize limits a sampled size to [max(10% of mean, 1 MB), 10 x mean] and returns bytes.
+// clampMailboxSize limits a sampled size (see minMailboxFrac, maxMailboxFactor) and returns bytes.
 func clampMailboxSize(t, mean float64) int64 {
-	return int64(min(max(t, max(mean*0.1, 1024*1024)), mean*10))
+	return int64(min(max(t, max(mean*minMailboxFrac, bytesPerMB)), mean*maxMailboxFactor))
 }

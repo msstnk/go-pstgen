@@ -11,6 +11,7 @@ const calendarFolder = "Calendar"
 
 // Meetings start on the half hour from 01:00 to 23:00 UTC and end by midnight.
 const (
+	fullDay   = 24 * time.Hour
 	slot      = 30 * time.Minute
 	firstSlot = 2  // 01:00
 	lastSlot  = 46 // 23:00
@@ -25,10 +26,10 @@ var meetingLengths = []struct {
 // sampleMeeting draws a meeting start within [end_date - range_days, end_date + calendar_days_ahead], its length,
 // and the time it was created (before it starts, and never after end_date).
 func sampleMeeting(rng *rand.Rand, cfg config.Config) (start time.Time, dur time.Duration, created time.Time) {
-	lo := cfg.End.Add(-time.Duration(cfg.RangeDays) * 24 * time.Hour)
-	hi := cfg.End.Add(time.Duration(cfg.CalendarDaysAhead) * 24 * time.Hour)
-	day0 := lo.Truncate(24 * time.Hour)
-	days := int(hi.Truncate(24*time.Hour).Sub(day0)/(24*time.Hour)) + 1
+	lo := cfg.End.Add(-time.Duration(cfg.RangeDays) * fullDay)
+	hi := cfg.End.Add(time.Duration(cfg.CalendarDaysAhead) * fullDay)
+	day0 := lo.Truncate(fullDay)
+	days := int(hi.Truncate(fullDay).Sub(day0)/(fullDay)) + 1
 
 	for range 1000 {
 		r := rng.Float64() * 10
@@ -40,9 +41,9 @@ func sampleMeeting(rng *rand.Rand, cfg config.Config) (start time.Time, dur time
 			}
 			r -= l.w
 		}
-		day := day0.Add(time.Duration(rng.Intn(days)) * 24 * time.Hour)
+		day := day0.Add(time.Duration(rng.Intn(days)) * fullDay)
 		start = day.Add(time.Duration(firstSlot+rng.Intn(lastSlot-firstSlot+1)) * slot)
-		if start.Before(lo) || start.After(hi) || start.Add(dur).After(day.Add(24*time.Hour)) {
+		if start.Before(lo) || start.After(hi) || start.Add(dur).After(day.Add(fullDay)) {
 			continue
 		}
 		break
@@ -51,6 +52,6 @@ func sampleMeeting(rng *rand.Rand, cfg config.Config) (start time.Time, dur time
 	if ref.After(cfg.End) {
 		ref = cfg.End
 	}
-	created = ref.Add(-time.Hour - time.Duration(rng.Float64()*float64(14*24*time.Hour-time.Hour)))
+	created = ref.Add(-time.Hour - time.Duration(rng.Float64()*float64(14*fullDay-time.Hour)))
 	return start, dur, created
 }

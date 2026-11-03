@@ -12,7 +12,12 @@ import (
 	"regexp"
 )
 
-const pad = 26 // word start padding, and the "end of word" symbol in the next position
+// Keep in sync with corpus.go.
+const (
+	pad           = 26 // word start padding, and the "end of word" symbol in the next position
+	trigramSyms   = pad + 1
+	trigramStates = trigramSyms * trigramSyms
+)
 
 func main() {
 	if len(os.Args) != 2 {
@@ -28,7 +33,7 @@ func main() {
 
 	// Only plain lowercase words: skips proper nouns, acronyms and possessives
 	re := regexp.MustCompile(`^[a-z]+$`)
-	var counts [27 * 27][27]uint32
+	var counts [trigramStates][trigramSyms]uint32
 	words := 0
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -43,7 +48,7 @@ func main() {
 			if i < len(w) {
 				next = int(w[i] - 'a')
 			}
-			counts[a*27+b][next]++
+			counts[a*trigramSyms+b][next]++
 			a, b = b, next
 		}
 	}
@@ -56,7 +61,7 @@ func main() {
 	fmt.Println()
 	fmt.Println("package gen")
 	fmt.Println()
-	fmt.Printf("// trigramCounts[a*27+b][c] is how often letter c (26 = end of word) followed the letters a, b (26 = start of word)\n")
+	fmt.Printf("// trigramCounts[a*trigramSyms+b][c] is how often letter c (26 = end of word) followed the letters a, b (26 = start of word)\n")
 	fmt.Printf("// in %d dictionary words.\n", words)
 	fmt.Println("var trigramCounts = [27 * 27][27]uint16{")
 	for s, row := range counts {

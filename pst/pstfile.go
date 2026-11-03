@@ -14,7 +14,8 @@ const (
 	bbtEntSize = 24
 )
 
-// File is an existing Unicode PST opened for inspection and in-place editing.
+// File is an existing Unicode PST opened for inspection and in-place editing. It reads the NDB layer ([MS-PST] 2.2): the
+// Node BTree and Block BTree reached from HEADER.root, and the blocks they locate.
 type File struct {
 	f       *os.File
 	crypt   CryptMethod
@@ -25,6 +26,7 @@ type File struct {
 	zeroes  [64 << 10]byte
 }
 
+// nbtEntry is a decoded NBTENTRY ([MS-PST] 2.2.2.7.7.4).
 type nbtEntry struct {
 	nid, parent uint32
 	data, sub   uint64
@@ -50,32 +52,38 @@ func openPST(path string, rw bool) (*File, error) {
 
 func (f *File) close() error { return f.f.Close() }
 
+// load validates the HEADER ([MS-PST] 2.2.2.6: dwMagic, wVer, both CRCs, bCryptMethod) and loads the BBT and NBT from ROOT.
 func (f *File) load() error {
 	h := make([]byte, headerSize)
-	if _, err := f.f.ReadAt(h, 0); err != nil || string(h[:4]) != "!BDN" {
+	if _, err := f.f.ReadAt(h, 0); err != nil || string(h[:4]) != pstMagic {
 		return fmt.Errorf("not a PST file")
 	}
-	if v := le.Uint16(h[10:]); v != 23 {
-		return fmt.Errorf("unsupported PST version %d (only Unicode, wVer 23)", v)
+	// Unicode PSTs have wVer >= 23 ([MS-PST] 2.2.2.6); 14 and 15 are ANSI. 37 is written by an Outlook that supports Windows
+	// Information Protection, whose data MAY be protected (and then cannot be read here). The spec describes no other layout
+	// for values above 23, so they are read like 23.
+	if v := le.Uint16(h[hdrVerOff:]); v < verUnicode {
+		return fmt.Errorf("unsupported PST version %d (only Unicode, wVer >= 23)", v)
 	}
-	if pstCRC(h[8:479]) != le.Uint32(h[4:]) || pstCRC(h[8:524]) != le.Uint32(h[524:]) {
+	if pstCRC(h[hdrMagicClientOff:hdrCRCPartialEnd]) != le.Uint32(h[hdrCRCPartialOff:]) || pstCRC(h[hdrMagicClientOff:hdrCRCFullEnd]) != le.Uint32(h[hdrCRCFullOff:]) {
 		return fmt.Errorf("header CRC mismatch")
 	}
-	f.crypt = CryptMethod(h[513])
+	f.crypt = CryptMethod(h[hdrCryptOff])
 	if f.crypt > CryptCyclic {
-		return fmt.Errorf("unsupported encryption method %#x", h[513])
+		return fmt.Errorf("unsupported encryption method %#x", h[hdrCryptOff])
 	}
 	var err error
-	if f.bbt, err = f.loadTree(le.Uint64(h[232:]), le.Uint64(h[240:]), 0x80, bbtEntSize); err != nil {
+	if f.bbt, err = f.loadTree(le.Uint64(h[hdrRootOff+rootBBTOff:]), le.Uint64(h[hdrRootOff+rootBBTOff+8:]), ptypeBBT, bbtEntSize); err != nil {
 		return fmt.Errorf("BBT: %w", err)
 	}
-	if f.nbt, err = f.loadTree(le.Uint64(h[216:]), le.Uint64(h[224:]), 0x81, nbtEntSize); err != nil {
+	if f.nbt, err = f.loadTree(le.Uint64(h[hdrRootOff+rootNBTOff:]), le.Uint64(h[hdrRootOff+rootNBTOff+8:]), ptypeNBT, nbtEntSize); err != nil {
 		return fmt.Errorf("NBT: %w", err)
 	}
 	return nil
 }
 
 // ---- B-Tree ----
+// Pages are BTPAGEs ([MS-PST] 2.2.2.7.7.1). Intermediate entries are BTENTRYs {btkey, BREF} ([MS-PST] 2.2.2.7.7.2), where btkey
+// is the smallest key under the child; leaf entries are NBTENTRYs or BBTENTRYs.
 
 type btPage struct {
 	ib    uint64
@@ -86,7 +94,7 @@ type btPage struct {
 	dead  bool // became empty and was unlinked from its parent
 }
 
-func (p *btPage) cnt() int { return int(p.buf[488]) }
+func (p *btPage) cnt() int { return int(p.buf[btCntOff]) }
 
 type btree struct {
 	ptype byte
@@ -95,6 +103,7 @@ type btree struct {
 	pages []*btPage
 }
 
+// loadTree loads the BTree whose root page is at ib with BID bid. ent is its leaf entry size (nbtEntSize or bbtEntSize).
 func (f *File) loadTree(bid, ib uint64, ptype byte, ent int) (*btree, error) {
 	t := &btree{ptype: ptype, ent: ent}
 	root, err := f.loadPage(t, bid, ib, -1)
@@ -105,31 +114,31 @@ func (f *File) loadTree(bid, ib uint64, ptype byte, ent int) (*btree, error) {
 	return t, nil
 }
 
-// loadPage reads a page and, recursively, its children. level is the expected level (-1: unknown, for the root).
+// loadPage reads a page, checks its PAGETRAILER ([MS-PST] 2.2.2.7.1: ptype, dwCRC, bid) and, recursively, its children. level is the expected level (-1: unknown, for the root).
 func (f *File) loadPage(t *btree, bid, ib uint64, level int) (*btPage, error) {
 	p := &btPage{ib: ib}
 	if _, err := f.f.ReadAt(p.buf[:], int64(ib)); err != nil {
 		return nil, fmt.Errorf("page @%#x: %w", ib, err)
 	}
-	tr := p.buf[496:]
+	tr := p.buf[pageTrailerOff:]
 	switch {
 	case tr[0] != t.ptype || tr[1] != t.ptype:
 		return nil, fmt.Errorf("page @%#x: bad page type %#x", ib, tr[0])
-	case pstCRC(p.buf[:496]) != le.Uint32(tr[4:]):
+	case pstCRC(p.buf[:pageTrailerOff]) != le.Uint32(tr[trailerCRCOff:]):
 		return nil, fmt.Errorf("page @%#x: CRC mismatch", ib)
-	case le.Uint64(tr[8:]) != bid:
-		return nil, fmt.Errorf("page @%#x: BID %#x, want %#x", ib, le.Uint64(tr[8:]), bid)
+	case le.Uint64(tr[trailerBIDOff:]) != bid:
+		return nil, fmt.Errorf("page @%#x: BID %#x, want %#x", ib, le.Uint64(tr[trailerBIDOff:]), bid)
 	}
-	p.level = int(p.buf[491])
+	p.level = int(p.buf[btLevelOff])
 	if level >= 0 && p.level != level {
 		return nil, fmt.Errorf("page @%#x: level %d, want %d", ib, p.level, level)
 	}
-	cnt, es := p.cnt(), int(p.buf[490])
+	cnt, es := p.cnt(), int(p.buf[btEntSizeOff])
 	want := t.ent
 	if p.level > 0 {
-		want = 24
+		want = btIntEntSize
 	}
-	if es != want || cnt*es > 488 {
+	if es != want || cnt*es > btBodySize {
 		return nil, fmt.Errorf("page @%#x: bad entry size/count %d/%d", ib, es, cnt)
 	}
 	t.pages = append(t.pages, p)
@@ -137,7 +146,7 @@ func (f *File) loadPage(t *btree, bid, ib uint64, level int) (*btPage, error) {
 		return p, nil
 	}
 	for i := 0; i < cnt; i++ {
-		e := p.buf[24*i:]
+		e := p.buf[btIntEntSize*i:]
 		k, err := f.loadPage(t, le.Uint64(e[8:]), le.Uint64(e[16:]), p.level-1)
 		if err != nil {
 			return nil, err
@@ -164,13 +173,14 @@ func (t *btree) each(fn func(e []byte)) {
 	rec(t.root)
 }
 
-// find returns the leaf page and slot of key (nil if absent).
+// find returns the leaf page and slot of key (nil if absent). In an intermediate page it follows the last entry whose btkey is
+// <= key.
 func (t *btree) find(key uint64) (*btPage, int) {
 	p := t.root
 	for p.level > 0 {
 		idx := -1
 		for i := 0; i < p.cnt(); i++ {
-			if le.Uint64(p.buf[24*i:]) > key {
+			if le.Uint64(p.buf[btIntEntSize*i:]) > key {
 				break
 			}
 			idx = i
@@ -206,7 +216,7 @@ func (t *btree) remove(del map[uint64]struct{}) bool {
 			}
 			if w != n {
 				clear(p.buf[w*t.ent : n*t.ent])
-				p.buf[488] = byte(w)
+				p.buf[btCntOff] = byte(w)
 				p.dirty = true
 			}
 			p.dead = w == 0
@@ -217,14 +227,14 @@ func (t *btree) remove(del map[uint64]struct{}) bool {
 			if rec(p.kids[i]) {
 				continue
 			}
-			copy(p.buf[24*w:], p.buf[24*i:24*i+24])
+			copy(p.buf[btIntEntSize*w:], p.buf[btIntEntSize*i:btIntEntSize*(i+1)])
 			p.kids[w] = p.kids[i]
 			w++
 		}
 		if w != n {
-			clear(p.buf[24*w : 24*n])
+			clear(p.buf[btIntEntSize*w : btIntEntSize*n])
 			p.kids = p.kids[:w]
-			p.buf[488] = byte(w)
+			p.buf[btCntOff] = byte(w)
 			p.dirty = true
 		}
 		p.dead = w == 0
@@ -244,7 +254,7 @@ func (f *File) flush(t *btree, zeroDead bool) error {
 				}
 			}
 		case p.dirty:
-			le.PutUint32(p.buf[500:], pstCRC(p.buf[:496]))
+			le.PutUint32(p.buf[pageTrailerOff+trailerCRCOff:], pstCRC(p.buf[:pageTrailerOff]))
 			if _, err := f.f.WriteAt(p.buf[:], int64(p.ib)); err != nil {
 				return err
 			}
@@ -274,6 +284,7 @@ func (f *File) nbtEntries() []nbtEntry {
 	return out
 }
 
+// decodeNBT decodes an NBTENTRY {nid (8 bytes), bidData, bidSub, nidParent}.
 func decodeNBT(e []byte) nbtEntry {
 	return nbtEntry{nid: le.Uint32(e), data: le.Uint64(e[8:]), sub: le.Uint64(e[16:]), parent: le.Uint32(e[24:])}
 }
@@ -286,12 +297,16 @@ func (f *File) node(nid uint32) (nbtEntry, bool) {
 	return decodeNBT(p.buf[i*nbtEntSize:]), true
 }
 
+// blockRef locates a block: its offset and cb, the data size from its BBTENTRY ([MS-PST] 2.2.2.7.7.3).
 type blockRef struct {
 	ib uint64
 	cb int
 }
 
-func (r blockRef) total() uint64 { return uint64(r.cb+16+63) &^ 63 }
+// total is the on-disk size: data, padding and BLOCKTRAILER, rounded up to a multiple of 64 bytes ([MS-PST] 2.2.2.8.2).
+func (r blockRef) total() uint64 {
+	return uint64(r.cb+blockTrailerSize+blockAlign-1) &^ (blockAlign - 1)
+}
 
 func (f *File) blockRef(bid uint64) (blockRef, error) {
 	p, i := f.bbt.find(bid)
@@ -302,7 +317,7 @@ func (f *File) blockRef(bid uint64) (blockRef, error) {
 	return blockRef{ib: le.Uint64(e[8:]), cb: int(le.Uint16(e[16:]))}, nil
 }
 
-// rawBlock reads and verifies a block, returning its on-disk (still encrypted) contents.
+// rawBlock reads and verifies a block (BLOCKTRAILER cb, bid and dwCRC, [MS-PST] 2.2.2.8.1), returning its on-disk (still encrypted) contents.
 func (f *File) rawBlock(bid uint64) ([]byte, error) {
 	r, err := f.blockRef(bid)
 	if err != nil {
@@ -315,11 +330,11 @@ func (f *File) rawBlock(bid uint64) ([]byte, error) {
 	if _, err := f.f.ReadAt(buf, int64(r.ib)); err != nil {
 		return nil, fmt.Errorf("block %#x @%#x: %w", bid, r.ib, err)
 	}
-	t := buf[len(buf)-16:]
+	t := buf[len(buf)-blockTrailerSize:]
 	switch {
-	case int(le.Uint16(t)) != r.cb || le.Uint64(t[8:]) != bid:
+	case int(le.Uint16(t)) != r.cb || le.Uint64(t[trailerBIDOff:]) != bid:
 		return nil, fmt.Errorf("block %#x @%#x: bad trailer", bid, r.ib)
-	case pstCRC(buf[:r.cb]) != le.Uint32(t[4:]):
+	case pstCRC(buf[:r.cb]) != le.Uint32(t[trailerCRCOff:]):
 		return nil, fmt.Errorf("block %#x @%#x: CRC mismatch", bid, r.ib)
 	}
 	return buf[:r.cb], nil
@@ -334,18 +349,18 @@ func (f *File) readBlock(bid uint64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if bid&2 == 0 {
+	if bid&bidInternal == 0 {
 		f.crypt.decrypt(b, bid)
 	}
 	return b, nil
 }
 
-// dataBlocks returns the plain data blocks of a data tree.
+// dataBlocks returns the plain data blocks of a data tree: one data block, or those under an XBLOCK / XXBLOCK ([MS-PST] 2.2.2.8.3.2).
 func (f *File) dataBlocks(bid uint64) ([][]byte, error) {
 	if bid == 0 {
 		return nil, nil
 	}
-	if bid&2 == 0 {
+	if bid&bidInternal == 0 {
 		b, err := f.readBlock(bid)
 		return [][]byte{b}, err
 	}
@@ -368,12 +383,13 @@ func (f *File) dataBlocks(bid uint64) ([][]byte, error) {
 	return out, nil
 }
 
+// xblockKids returns the BIDs an XBLOCK / XXBLOCK refers to ([MS-PST] 2.2.2.8.3.2).
 func xblockKids(bid uint64, b []byte) ([]uint64, error) {
-	if len(b) < 8 || b[0] != 0x01 {
+	if len(b) < 8 || b[0] != btypeXBlock {
 		return nil, fmt.Errorf("block %#x: not an XBLOCK", bid)
 	}
 	n := int(le.Uint16(b[2:]))
-	if 8+8*n > len(b) {
+	if internalHdrSize+bidSize*n > len(b) {
 		return nil, fmt.Errorf("block %#x: truncated XBLOCK", bid)
 	}
 	kids := make([]uint64, n)
@@ -389,7 +405,7 @@ func (f *File) walkData(bid uint64, visit func(uint64)) error {
 		return nil
 	}
 	visit(bid)
-	if bid&2 == 0 {
+	if bid&bidInternal == 0 {
 		return nil
 	}
 	b, err := f.rawBlock(bid)
@@ -418,12 +434,12 @@ func (f *File) walkSub(bid uint64, visit func(uint64)) error {
 	if err != nil {
 		return err
 	}
-	if len(b) < 8 || b[0] != 0x02 {
+	if len(b) < 8 || b[0] != btypeSLBlock {
 		return fmt.Errorf("block %#x: not an SLBLOCK/SIBLOCK", bid)
 	}
 	n := int(le.Uint16(b[2:]))
-	if b[1] == 0 {
-		if 8+24*n > len(b) {
+	if b[1] == levelSLBlock {
+		if internalHdrSize+slEntSize*n > len(b) {
 			return fmt.Errorf("block %#x: truncated SLBLOCK", bid)
 		}
 		for i := 0; i < n; i++ {
@@ -448,6 +464,7 @@ func (f *File) walkSub(bid uint64, visit func(uint64)) error {
 	return nil
 }
 
+// walkNode visits the BIDs of every block of a node: its data tree and its subnode tree.
 func (f *File) walkNode(e nbtEntry, visit func(uint64)) error {
 	if err := f.walkData(e.data, visit); err != nil {
 		return err
@@ -456,7 +473,8 @@ func (f *File) walkNode(e nbtEntry, visit func(uint64)) error {
 }
 
 // writeBlock rewrites an existing block in place with new plain contents (cb may shrink) and updates its BBT entry.
-// The BID, and so the key for encryption, stays the same.
+// The BID, and so the key for encryption, stays the same ([MS-PST] 5.2). The BLOCKTRAILER gets the new cb and dwCRC;
+// wSig depends only on the offset and BID ([MS-PST] 5.5), which do not change.
 func (f *File) writeBlock(bid uint64, data []byte) error {
 	r, err := f.blockRef(bid)
 	if err != nil {
@@ -468,10 +486,10 @@ func (f *File) writeBlock(bid uint64, data []byte) error {
 	n := blockRef{r.ib, len(data)}
 	buf := make([]byte, n.total())
 	copy(buf, data)
-	if bid&2 == 0 {
+	if bid&bidInternal == 0 {
 		f.crypt.encrypt(buf[:len(data)], bid)
 	}
-	t := buf[len(buf)-16:]
+	t := buf[len(buf)-blockTrailerSize:]
 	le.PutUint16(t[0:], uint16(len(data)))
 	le.PutUint16(t[2:], sig(r.ib, bid))
 	le.PutUint32(t[4:], pstCRC(buf[:len(data)]))

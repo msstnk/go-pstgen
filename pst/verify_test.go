@@ -34,8 +34,8 @@ func readPST(path string) (*pstReader, error) {
 		return nil, fmt.Errorf("%s: not a PST", path)
 	}
 	r := &pstReader{b: b, crypt: CryptMethod(b[513]), bbt: map[uint64]bbtEnt{}, nbt: map[uint32]nbtEnt{}}
-	if v := le.Uint16(b[10:]); v != 23 {
-		r.errf("header: wVer %d, want 23", v)
+	if v := le.Uint16(b[10:]); v < 23 {
+		r.errf("header: wVer %d, want >= 23", v)
 	}
 	if pstCRC(b[8:479]) != le.Uint32(b[4:]) {
 		r.errf("header: dwCRCPartial mismatch")
@@ -660,8 +660,15 @@ func TestStoreValid(t *testing.T) {
 }
 
 // TestRefFile confirms that the reference PST openable in Outlook satisfies the same verification rules (sanity check of the verifier itself).
+//
+// ref/ref_mailbox.pst is not in the repository: *.pst and ref/ are git-ignored because of their size (about 150 MB). The
+// test is skipped when the file is missing (and with -short), so `go test ./...` passes without it. To run it, put an
+// Outlook-created Unicode PST (wVer 23) at ref/ref_mailbox.pst, or set PST_REF_FILE to another file.
 func TestRefFile(t *testing.T) {
 	path := filepath.Join("..", "ref", "ref_mailbox.pst")
+	if p := os.Getenv("PST_REF_FILE"); p != "" {
+		path = p
+	}
 	if _, err := os.Stat(path); err != nil {
 		t.Skip("ref PST not found")
 	}

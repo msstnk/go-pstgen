@@ -6,23 +6,55 @@ import (
 	"time"
 )
 
-// NID types
+// NID types ([MS-PST] 2.2.2.1, NID_TYPE) and the fixed NIDs ([MS-PST] 2.4.1)
 const (
-	nidInternal   = 0x01
-	nidFolder     = 0x02
-	nidMessage    = 0x04
-	nidAttachment = 0x05
-	nidHierarchy  = 0x0D
-	nidContents   = 0x0E
-	nidAssoc      = 0x0F
-	nidAttachTbl  = 0x11
-	nidRecipTbl   = 0x12
+	nidInternal       = 0x01 // NID_TYPE_INTERNAL
+	nidFolder         = 0x02 // NID_TYPE_NORMAL_FOLDER
+	nidSearchFolder   = 0x03 // NID_TYPE_SEARCH_FOLDER
+	nidMessage        = 0x04 // NID_TYPE_NORMAL_MESSAGE
+	nidAttachment     = 0x05 // NID_TYPE_ATTACHMENT
+	nidAssocMessage   = 0x08 // NID_TYPE_ASSOC_MESSAGE (folder-associated message)
+	nidHierarchy      = 0x0D // NID_TYPE_HIERARCHY_TABLE
+	nidContents       = 0x0E // NID_TYPE_CONTENTS_TABLE
+	nidAssoc          = 0x0F // NID_TYPE_ASSOC_CONTENTS_TABLE
+	nidSearchContents = 0x10 // NID_TYPE_SEARCH_CONTENTS_TABLE
+	nidAttachTbl      = 0x11 // NID_TYPE_ATTACHMENT_TABLE
+	nidRecipTbl       = 0x12 // NID_TYPE_RECIPIENT_TABLE
+	nidLTP            = 0x1F // NID_TYPE_LTP
 
-	nidMessageStore = 0x21
-	nidNameToID     = 0x61
-	nidRootFolder   = 0x122
-	nidRecipTable   = 0x692
-	nidAttachTable  = 0x671
+	nidTypeBits = 5    // an NID is nidIndex<<nidTypeBits | nidType ([MS-PST] 2.2.2.1)
+	nidTypeMask = 0x1F // (1<<nidTypeBits)-1
+	// Subnode NIDs (attachments, LTP subnodes) are local to their parent node ([MS-PST] 2.2.2.8.3.3), so their index starts at 0x401 as well.
+	firstSubIdx = 0x401
+
+	// HEADER.rgnid starting nidIndex per NID type ([MS-PST] 2.2.2.6): the last index allocated in a blank file,
+	// so the first NID handed out has index start+1.
+	nidStartFolder   = 0x400
+	nidStartSearch   = 0x4000
+	nidStartMessage  = 0x10000
+	nidStartAssocMsg = 0x8000
+	nidStartOther    = 0x400
+
+	// HID ([MS-PST] 2.3.1.1): hidType (always 0) in the low 5 bits, then the 11-bit hidIndex, then the 16-bit hidBlockIndex.
+	hidTypeMask = 0x1F
+	hidIdxShift = 5
+	hidIdxMask  = 0x7FF
+
+	nidMessageStore = 0x21  // NID_MESSAGE_STORE
+	nidNameToID     = 0x61  // NID_NAME_TO_ID_MAP
+	nidRootFolder   = 0x122 // NID_ROOT_FOLDER
+	nidRecipTable   = 0x692 // NID_RECIPIENT_TABLE: template of recipient tables ([MS-PST] 2.4.5.3.1); a message's own table is a subnode with this NID
+	nidAttachTable  = 0x671 // NID_ATTACHMENT_TABLE: template of attachment tables ([MS-PST] 2.4.6.1.1); likewise used as the subnode NID
+)
+
+// Property IDs of the folder and message store properties that the pruner reads or clears (PidTag names, [MS-OXPROPS]).
+const (
+	pidDisplayName   = 0x3001 // PidTagDisplayName
+	pidContentCount  = 0x3602 // PidTagContentCount
+	pidContentUnread = 0x3603 // PidTagContentUnreadCount
+	pidSubfolders    = 0x360A // PidTagSubfolders
+	pidAssocContent  = 0x3617 // PidTagAssociatedContentCount
+	pidIpmSubTreeEID = 0x35E0 // PidTagIpmSubTreeEntryId
 )
 
 // FileTime returns a FILETIME (100 ns units since 1601-01-01).
@@ -94,10 +126,12 @@ func Create(path, displayName string, key []byte, bufSize int, crypt CryptMethod
 	if err != nil {
 		return nil, err
 	}
-	w.nextIdx[nidFolder] = 0x405 // 0x8022..0x8082 are for the fixed folders
+	w.nextIdx[nidFolder] = 0x405 // nidIndex 0x401..0x404 are taken by the fixed folders below (NIDs 0x8022..0x8082)
 	s := &Store{w: w, name: displayName}
 	copy(s.recKey[:], key)
 	s.Root = s.newFolder(nil, nidRootFolder, "", "")
+	// The NIDs of the folders below are those of the sample message store in [MS-PST] 3.10 (IPM subtree 0x8022, Finder 0x8042,
+	// Deleted Items 0x8062). 0x8082 and 0x2223 are not in the specification; they are the ones Outlook uses.
 	s.Top = s.newFolder(s.Root, 0x8022, "Top of Personal Folders", "")
 	sr := s.newFolder(s.Root, 0x8042, "Search Root", "")
 	sp := s.newFolder(s.Root, 0x2223, "SPAM Search Folder 2", "")
@@ -132,6 +166,8 @@ func (s *Store) AddPlainFolder(parent *Folder, name string) *Folder {
 	return s.newFolder(parent, s.w.NewNID(nidFolder), name, "")
 }
 
+// entryID builds an EntryID of this store for a node: rgbFlags (4 zero bytes), uid (the PidTagRecordKey) and the NID
+// ([MS-PST] 2.4.3.2 Mapping between EntryID and NID).
 func (s *Store) entryID(nid uint32) []byte {
 	b := make([]byte, 24)
 	copy(b[4:], s.recKey[:])
@@ -147,7 +183,10 @@ func joinNames(ps []Person) string {
 	return strings.Join(n, "; ")
 }
 
-// oneOffEntryID builds a one-off EntryID (MS-OXCDATA 2.2.5.1) so Outlook can show the SMTP address.
+// oneOffEntryID builds a one-off EntryID ([MS-OXCDATA] 2.2.5.1 One-Off EntryID Structure) so Outlook can show the SMTP address:
+// Flags (0), the fixed ProviderUID, Version (0) and a 16-bit flags word, then DisplayName, AddressType and EmailAddress as
+// null-terminated UTF-16 strings. The flags word is stored big-endian: 0x0080 = U (UTF-16 strings) with M clear (TNEF), written as
+// bytes 00 80. Outlook-created entries usually also set M (0x0180).
 func oneOffEntryID(p Person) []byte {
 	b := []byte{0, 0, 0, 0,
 		0x81, 0x2B, 0x1F, 0xA4, 0xBE, 0xA3, 0x10, 0x19, 0x9D, 0x6E, 0x00, 0xDD, 0x01, 0x0F, 0x54, 0x02,
@@ -157,6 +196,7 @@ func oneOffEntryID(p Person) []byte {
 	return append(b, UTF16LE(p.Addr+"\x00")...)
 }
 
+// searchKey is the PidTagSearchKey of a recipient: "SMTP:" and the upper-cased address, null-terminated.
 func searchKey(p Person) []byte { return []byte("SMTP:" + strings.ToUpper(p.Addr) + "\x00") }
 
 func i32(v int32) []byte {
@@ -186,7 +226,8 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 	nid := w.NewNID(nidMessage)
 	sc := newSubCtx(w)
 
-	// recipient table
+	// Recipient table: a TC whose columns are those of the recipient table template ([MS-PST] 2.4.5.3). PidTagRecipientType is
+	// 1 (To) or 2 (Cc), PidTagObjectType 6 (a recipient).
 	var rrows []Row
 	for i, p := range append(append([]Person{}, m.To...), m.Cc...) {
 		typ := int32(1)
@@ -203,12 +244,13 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 	rsc := newSubCtx(w)
 	sc.addNode(nidRecipTable, buildTC(colsRecipient, rrows, rsc), rsc)
 
-	// attachments
+	// Attachments: each is an attachment object (a PC, [MS-PST] 2.4.6.2) in a subnode of the message with its own NID, plus a row in
+	// the attachment table ([MS-PST] 2.4.6.1) whose row ID is that NID ([MS-PST] 2.4.6.1.3). The data is PidTagAttachDataBinary.
 	size := int32(len(m.Body)*2 + MessageBaseSize)
 	if len(m.Attachments) > 0 {
 		var arows []Row
 		for i, a := range m.Attachments {
-			anid := uint32(0x401+i)<<5 | nidAttachment
+			anid := uint32(firstSubIdx+i)<<nidTypeBits | nidAttachment
 			asc := newSubCtx(w)
 			props := []Prop{
 				PInt32(0x0E20, int32(len(a.Data))), PInt32(0x0E21, int32(i)),
@@ -229,7 +271,7 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 	}
 
 	hasAttach := len(m.Attachments) > 0
-	flags := int32(0x01)
+	flags := int32(0x01) // PidTagMessageFlags: 0x01 = read; 0x10 below = has attachments ([MS-OXCMSG])
 	if hasAttach {
 		flags |= 0x10
 	}
@@ -264,6 +306,9 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 	})
 }
 
+// writeFolder writes the four nodes of a Folder object ([MS-PST] 2.4.4): the folder PC, then its hierarchy, contents and FAI
+// contents tables, which share the folder's nidIndex. Counts in the PC and in the parent's hierarchy row are kept in step
+// ([MS-PST] 2.4.4.3).
 func (s *Store) writeFolder(f *Folder) {
 	w := s.w
 	nid := f.NID
@@ -290,7 +335,7 @@ func (s *Store) writeFolder(f *Folder) {
 		w.PutNode(nid, parent, ch, sc.subs)
 	}
 
-	base := nid &^ 0x1F
+	base := nid &^ nidTypeMask
 	if f.verbatim {
 		return // hierarchy/content/FAI tables are also emitted from the skeleton
 	}
@@ -360,7 +405,9 @@ func (s *Store) Close() error {
 	nch := nameToIDNode(nsc)
 	w.PutNode(nidNameToID, 0, nch, nsc.subs)
 
-	// 0x0E34 is store identification info containing a GUID. Vary the GUID part per store.
+	// 0x0E34 (PidTagReplVersionHistory) is store identification info containing a GUID. Vary the GUID part per store.
+	// Message store PC ([MS-PST] 2.4.3): the required properties are PidTagRecordKey 0x0FF9, PidTagDisplayName 0x3001,
+	// PidTagIpmSubTreeEntryId 0x35E0, PidTagIpmWastebasketEntryId 0x35E3 and PidTagFinderEntryId 0x35E7 (2.4.3.1).
 	var info [24]byte
 	le.PutUint32(info[0:], 1)
 	for i := range s.recKey {
@@ -370,9 +417,11 @@ func (s *Store) Close() error {
 	sc := newSubCtx(w)
 	props := []Prop{
 		PBin(0x0E34, info[:]), PInt32(0x0E38, 0), PBin(0x0FF9, s.recKey[:]), PStr(0x3001, s.name),
-		PInt32(0x35DF, 0xC9),
+		PInt32(0x35DF, 0xC9), // PidTagValidFolderMask
 		PBin(0x35E0, s.entryID(s.Top.NID)), PBin(0x35E3, s.entryID(s.Deleted.NID)),
 		PBin(0x35E6, s.entryID(0x8082)), PBin(0x35E7, s.entryID(0x8042)),
+		// 0x35E6 (-> IPM_COMMON_VIEWS), 0x6633, 0x66FA and 0x66FC are in neither [MS-PST] nor [MS-OXPROPS]; the values are those of
+		// Outlook-created stores. 0x67FF is PidTagPstPassword (0 = no password, [MS-PST] 2.4.3.3).
 		PBool(0x6633, true), PInt32(0x66FA, 0xE0011), PInt32(0x66FC, 0x18B2B3), PInt32(0x67FF, 0),
 	}
 	sch := buildPC(props, sc)

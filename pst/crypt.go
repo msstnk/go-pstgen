@@ -22,7 +22,8 @@ func ParseCryptMethod(s string) (CryptMethod, bool) {
 	return 0, false
 }
 
-// mpbbR / mpbbS / mpbbI are mpbbCrypt from [MS-PST] 5.1, split into three tables.
+// mpbbR / mpbbS / mpbbI are mpbbCrypt from [MS-PST] 5.1 (Permutative Encoding), split into three tables of 256 bytes.
+// They match the specification's table byte for byte.
 // mpbbI is the inverse permutation of mpbbR; mpbbS is an involution (S[S[x]] == x).
 var mpbbR = [256]byte{
 	0x41, 0x36, 0x13, 0x62, 0xa8, 0x21, 0x6e, 0xbb, 0xf4, 0x16, 0xcc, 0x04, 0x7f, 0x64, 0xe8, 0x5d,
@@ -70,8 +71,10 @@ func init() {
 	}
 }
 
-// encrypt encrypts the contents of an external data block in place. key is the BID ([MS-PST] 5.2 uses its low 32 bits).
-// Internal blocks (XBLOCK / SLBLOCK etc.) and B-Tree pages are not encrypted.
+// encrypt encrypts the contents of an external data block in place. key is the BID ([MS-PST] 5.2 Cyclic Encoding uses its low 32 bits).
+// Only the data field of data blocks is encoded: not the padding and BLOCKTRAILER, internal blocks (XBLOCK / SLBLOCK etc.) or
+// B-Tree pages ([MS-PST] 2.2.2.8.3.1.1).
+// CryptPermute is NDB_CRYPT_PERMUTE (5.1, a substitution through mpbbR); CryptCyclic is NDB_CRYPT_CYCLIC (5.2, a keyed variant).
 func (m CryptMethod) encrypt(b []byte, key uint64) {
 	switch m {
 	case CryptPermute:
