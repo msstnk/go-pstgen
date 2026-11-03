@@ -5,20 +5,51 @@ import (
 	"unicode/utf16"
 )
 
-// MAPI property types
+// MAPI property types ([MS-OXCDATA] 2.11.1)
 const (
-	PtShort   = 0x0002
-	PtLong    = 0x0003
-	PtFloat   = 0x0004
-	PtDouble  = 0x0005
-	PtBool    = 0x000B
-	PtI8      = 0x0014
-	PtUnicode = 0x001F
-	PtTime    = 0x0040
-	PtBinary  = 0x0102
+	PtNull     = 0x0001 // PtypNull
+	PtShort    = 0x0002
+	PtLong     = 0x0003
+	PtFloat    = 0x0004
+	PtDouble   = 0x0005
+	PtCurrency = 0x0006 // PtypCurrency
+	PtError    = 0x000A // PtypErrorCode
+	PtBool     = 0x000B
+	PtI8       = 0x0014
+	PtUnicode  = 0x001F
+	PtTime     = 0x0040
+	PtBinary   = 0x0102
 )
 
-const maxHeapItem = 3580
+// Heap-on-Node (HN, [MS-PST] 2.3.1). An HN is a sequence of data blocks, each holding heap items followed by
+// an HNPAGEMAP; the first block starts with an HNHDR, others with an HNPAGEHDR or HNBITMAPHDR.
+const (
+	// maxHeapItem is the largest heap allocation (a value bigger than this is stored in a subnode,
+	// [MS-PST] 2.3.3.3: "HID (<= 3580 bytes)" vs "NID (subnode, > 3580 bytes)").
+	maxHeapItem = 3580
+
+	hnSig = 0xEC // HNHDR.bSig
+
+	// HNHDR { ibHnpm u16, bSig u8, bClientSig u8, hidUserRoot u32, rgbFillLevel [4]byte } = 12 bytes ([MS-PST] 2.3.1.2).
+	hnHdrSize         = 12
+	hnPageHdrSize     = 2   // HNPAGEHDR { ibHnpm u16 } ([MS-PST] 2.3.1.3)
+	hnBitmapHdrSize   = 66  // HNBITMAPHDR { ibHnpm u16, rgbFillLevel [64]byte } ([MS-PST] 2.3.1.4)
+	hnFillLevelOff    = 8   // HNHDR.rgbFillLevel: eight 4-bit fill levels for data blocks 0..7
+	hnFillLevelBlocks = 8   // blocks covered by HNHDR.rgbFillLevel
+	hnBitmapOff       = 2   // HNBITMAPHDR.rgbFillLevel: 128 4-bit fill levels
+	hnBitmapEvery     = 128 // an HNBITMAPHDR sits in block 8 and then every 128 blocks (8, 136, 264, ...)
+	hnBitmapFirst     = 8
+
+	// bClientSig ([MS-PST] 2.3.1.2)
+	clientSigTC  = 0x7C // Table Context
+	clientSigBTH = 0xB5 // BTree-on-Heap; also BTHHEADER.bType ([MS-PST] 2.3.2.1)
+	clientSigPC  = 0xBC // Property Context
+
+	// Fill level ([MS-PST] 2.3.1.2): FILL_LEVEL_EMPTY (>= 3584 bytes free) .. FILL_LEVEL_FULL (< 8 bytes free).
+	fillEmptyFree = 3584
+	fillFullFree  = 8
+	fillLevelFull = 0xF
+)
 
 // Prop is one property of a PC. Data is the raw value bytes (fixed-length values are LE, strings are UTF-16LE).
 type Prop struct {
@@ -83,10 +114,10 @@ type subCtx struct {
 	ltp  uint32
 }
 
-func newSubCtx(w *Writer) *subCtx { return &subCtx{w: w, ltp: 0x401} }
+func newSubCtx(w *Writer) *subCtx { return &subCtx{w: w, ltp: firstSubIdx} }
 
 func (c *subCtx) nextLTP() uint32 {
-	n := c.ltp<<5 | 0x1F
+	n := c.ltp<<nidTypeBits | nidLTP
 	c.ltp++
 	return n
 }
@@ -128,12 +159,12 @@ func newHeap(sig byte) *heap {
 
 func (h *heap) newBlock() *hblock {
 	i := len(h.blocks)
-	hdr := 2
+	hdr := hnPageHdrSize
 	switch {
 	case i == 0:
-		hdr = 12
-	case i%128 == 8:
-		hdr = 66
+		hdr = hnHdrSize
+	case i%hnBitmapEvery == hnBitmapFirst:
+		hdr = hnBitmapHdrSize
 	}
 	b := &hblock{buf: make([]byte, hdr, blockMax)}
 	h.blocks = append(h.blocks, b)
@@ -153,19 +184,20 @@ func (h *heap) allocBuf(n int) (uint32, []byte) {
 	start := len(b.buf)
 	b.buf = b.buf[:start+sz]
 	b.offs = append(b.offs, uint16(start))
-	hid := uint32(len(h.blocks)-1)<<16 | uint32(len(b.offs))<<5
+	hid := uint32(len(h.blocks)-1)<<16 | uint32(len(b.offs))<<hidIdxShift
 	return hid, b.buf[start : start+n]
 }
 
+// fillLevelMin[l] is the least free space (bytes) of FILL_LEVEL l ([MS-PST] 2.3.1.2); less than fillFullFree is FILL_LEVEL_FULL.
+var fillLevelMin = [...]int{fillEmptyFree, 2560, 2048, 1792, 1536, 1280, 1024, 768, 512, 256, 128, 64, 32, 16, fillFullFree}
+
 func fillLevel(free int) byte {
-	switch {
-	case free >= 3584:
-		return 0
-	case free < 8:
-		return 15
+	for l, m := range fillLevelMin {
+		if free >= m {
+			return byte(l)
+		}
 	}
-	l := 14 - free*14/3584
-	return byte(max(1, min(14, l)))
+	return fillLevelFull
 }
 
 // finish finalizes the HNPAGEMAP and header and returns the NDB block sequence.
@@ -184,33 +216,43 @@ func (h *heap) finish(userRoot uint32) [][]byte {
 		le.PutUint16(b.buf[pm+4+2*n:], uint16(end))
 		le.PutUint16(b.buf, uint16(pm))
 		if i < len(h.blocks)-1 {
-			levels[i] = 15 // every block but the last is zero-padded to blockMax by putChunks
+			levels[i] = fillLevelFull // every block but the last is zero-padded to blockMax by putChunks
 		} else {
 			levels[i] = fillLevel(blockMax - len(b.buf))
 		}
 		out[i] = b.buf
 	}
 	b0 := h.blocks[0].buf
-	b0[2], b0[3] = 0xEC, h.sig
+	b0[2], b0[3] = hnSig, h.sig
 	le.PutUint32(b0[4:], userRoot)
-	for i := 0; i < len(levels) && i < 8; i++ {
-		b0[8+i/2] |= levels[i] << (4 * (i % 2))
+	// Each fill level is a 4-bit value; the even block of a pair takes the low nibble.
+	for i := 0; i < len(levels) && i < hnFillLevelBlocks; i++ {
+		b0[hnFillLevelOff+i/2] |= levels[i] << (4 * (i % 2))
 	}
-	for bi := 8; bi < len(h.blocks); bi += 128 {
+	for bi := hnBitmapFirst; bi < len(h.blocks); bi += hnBitmapEvery {
 		bb := h.blocks[bi].buf
-		for k := 0; k < 128 && bi+k < len(levels); k++ {
-			bb[2+k/2] |= levels[bi+k] << (4 * (k % 2))
+		for k := 0; k < hnBitmapEvery && bi+k < len(levels); k++ {
+			bb[hnBitmapOff+k/2] |= levels[bi+k] << (4 * (k % 2))
 		}
 	}
 	return out
 }
 
+// BTHHEADER { bType u8, cbKey u8, cbEnt u8, bIdxLevels u8, hidRoot u32 } = 8 bytes ([MS-PST] 2.3.2.1).
+// Intermediate records are (key, HID of the child) pairs ([MS-PST] 2.3.2.2).
+const (
+	bthHdrSize   = 8
+	bthIdxLevels = 3 // BTHHEADER.bIdxLevels offset
+	bthRootOff   = 4 // BTHHEADER.hidRoot offset
+	bthHIDSize   = 4 // size of the child HID in an intermediate record
+)
+
 // bth builds a BTH from recs (concatenated fixed-length records in ascending key order) and fills hdr (BTHHEADER).
 func (h *heap) bth(hdr []byte, cbKey, cbEnt int, recs []byte) {
 	rs := cbKey + cbEnt
 	n := len(recs) / rs
-	hdr[0], hdr[1], hdr[2], hdr[3] = 0xB5, byte(cbKey), byte(cbEnt), 0
-	le.PutUint32(hdr[4:], 0)
+	hdr[0], hdr[1], hdr[2], hdr[bthIdxLevels] = clientSigBTH, byte(cbKey), byte(cbEnt), 0
+	le.PutUint32(hdr[bthRootOff:], 0)
 	if n == 0 {
 		return
 	}
@@ -226,10 +268,10 @@ func (h *heap) bth(hdr []byte, cbKey, cbEnt int, recs []byte) {
 		copy(b, recs[i*rs:j*rs])
 		cur = append(cur, node{hid, recs[i*rs : i*rs+cbKey]})
 	}
-	ir := cbKey + 4
+	ir := cbKey + bthHIDSize
 	iper := maxHeapItem / ir
 	for len(cur) > 1 {
-		hdr[3]++
+		hdr[bthIdxLevels]++
 		var next []node
 		for i := 0; i < len(cur); i += iper {
 			j := min(len(cur), i+iper)
@@ -242,27 +284,35 @@ func (h *heap) bth(hdr []byte, cbKey, cbEnt int, recs []byte) {
 		}
 		cur = next
 	}
-	le.PutUint32(hdr[4:], cur[0].hid)
+	le.PutUint32(hdr[bthRootOff:], cur[0].hid)
 }
 
 // ---- Property Context ----
 
 func inlineType(t uint16) bool {
 	switch t {
-	case PtShort, PtLong, PtFloat, PtBool, 0x000A, 0x0001:
+	case PtShort, PtLong, PtFloat, PtBool, PtError, PtNull:
 		return true
 	}
 	return false
 }
 
+// PC BTH record { wPropId u16, wPropType u16, dwValueHnid u32 }: cbKey 2, cbEnt 6 ([MS-PST] 2.3.3.3).
+// A value of at most 4 bytes is stored in dwValueHnid itself; a larger one is an HID (<= maxHeapItem) or a subnode NID.
+const (
+	pcKeySize = 2
+	pcEntSize = 6
+	pcRecSize = pcKeySize + pcEntSize
+)
+
 // buildPC returns the NDB block sequence of a Property Context. Large values are moved out to subnodes of sc.
 func buildPC(props []Prop, sc *subCtx) [][]byte {
 	sort.Slice(props, func(i, j int) bool { return props[i].ID < props[j].ID })
-	h := newHeap(0xBC)
-	hdrHid, hdr := h.allocBuf(8)
-	recs := make([]byte, 8*len(props))
+	h := newHeap(clientSigPC)
+	hdrHid, hdr := h.allocBuf(bthHdrSize)
+	recs := make([]byte, pcRecSize*len(props))
 	for i, p := range props {
-		r := recs[8*i:]
+		r := recs[pcRecSize*i:]
 		le.PutUint16(r, p.ID)
 		le.PutUint16(r[2:], p.Type)
 		var v uint32
@@ -281,7 +331,7 @@ func buildPC(props []Prop, sc *subCtx) [][]byte {
 		}
 		le.PutUint32(r[4:], v)
 	}
-	h.bth(hdr, 2, 6, recs)
+	h.bth(hdr, pcKeySize, pcEntSize, recs)
 	return h.finish(hdrHid)
 }
 
@@ -303,7 +353,7 @@ type Row struct {
 
 func cellSize(t uint16) int {
 	switch t {
-	case PtI8, PtTime, PtDouble, 0x0006:
+	case PtI8, PtTime, PtDouble, PtCurrency:
 		return 8
 	case PtShort:
 		return 2
@@ -315,15 +365,45 @@ func cellSize(t uint16) int {
 
 func isVar(t uint16) bool {
 	switch t {
-	case PtLong, PtFloat, 0x000A, PtI8, PtTime, PtDouble, 0x0006, PtShort, PtBool:
+	case PtLong, PtFloat, PtError, PtI8, PtTime, PtDouble, PtCurrency, PtShort, PtBool:
 		return false
 	}
 	return true
 }
 
 const (
-	tagRowID  = 0x67F2
-	tagRowVer = 0x67F3
+	tagRowID  = 0x67F2 // PidTagLtpRowId
+	tagRowVer = 0x67F3 // PidTagLtpRowVer
+)
+
+// Table Context ([MS-PST] 2.3.4).
+//
+// TCINFO { bType u8, cCols u8, rgib [4]u16, hidRowIndex u32, hnidRows u32, hidIndex u32, rgTCOLDESC } ([MS-PST] 2.3.4.1)
+// followed by cCols TCOLDESC { tag u32, ibData u16, cbData u8, iBit u8 } ([MS-PST] 2.3.4.2).
+const (
+	tcInfoHdrSize = 22 // TCINFO without rgTCOLDESC
+	tcColDescSize = 8
+	tcColsOff     = 1  // cCols
+	tcRgibOff     = 2  // rgib[TCI_4b, TCI_2b, TCI_1b, TCI_bm]: end offsets of the 4/8-byte, 2-byte, 1-byte groups and of the CEB
+	tcRowIndexOff = 10 // hidRowIndex: HID of the RowIndex BTH
+	tcRowsOff     = 14 // hnidRows: HNID of the Row Matrix (0 if no rows)
+	tcHidIndexOff = 18 // hidIndex: deprecated, must be 0
+	tciGroups     = 3  // TCI_4b, TCI_2b, TCI_1b (TCI_bm is the row size)
+	tciBM         = 3  // index of TCI_bm in rgib
+
+	// Row Data Format ([MS-PST] 2.3.4.4.1): dwRowID (PidTagLtpRowId, ibData 0, iBit 0) and dwRowVer
+	// (PidTagLtpRowVer, ibData 4, iBit 1) always come first, so other columns start at the 8th byte and iBit 2.
+	rowIDOff     = 0
+	rowVerOff    = 4
+	rowFixedSize = 8
+	firstUserBit = 2
+
+	// RowIndex BTH ([MS-PST] 2.3.4.3): (dwRowID, dwRowIndex), both 4 bytes.
+	rowIdxKeySize = 4
+	rowIdxEntSize = 4
+	rowIdxRecSize = rowIdxKeySize + rowIdxEntSize
+
+	cebFixedBits = 0xC0 // CEB bits 0 and 1 (RowID, RowVer) are always set; bit n is bit 7-n%8 of CEB byte n/8
 )
 
 // buildTC builds a Table Context. cols is in iBit order (iBit 0/1 are fixed as RowID/RowVer).
@@ -341,15 +421,15 @@ func buildTC(cols []ColDef, rows []Row, sc *subCtx) [][]byte {
 		col{ColDef: ColDef{tagRowID, PtLong}, src: -1, size: 4, bit: 0},
 		col{ColDef: ColDef{tagRowVer, PtLong}, src: -2, size: 4, bit: 1})
 	for i, c := range cols {
-		byBit = append(byBit, col{ColDef: c, src: i, size: cellSize(c.Type), bit: i + 2})
+		byBit = append(byBit, col{ColDef: c, src: i, size: cellSize(c.Type), bit: i + firstUserBit})
 	}
-	off := 8
+	off := rowFixedSize
 	var rgib [4]int
-	for pass := 0; pass < 3; pass++ {
+	for pass := 0; pass < tciGroups; pass++ {
 		for i := range byBit {
 			c := &byBit[i]
 			if c.src < 0 {
-				c.ib = 4 * (-c.src - 1)
+				c.ib = rowVerOff * (-c.src - 1) // RowID at 0, RowVer at 4
 				continue
 			}
 			if (pass == 0 && c.size >= 4) || (pass == 1 && c.size == 2) || (pass == 2 && c.size == 1) {
@@ -361,7 +441,7 @@ func buildTC(cols []ColDef, rows []Row, sc *subCtx) [][]byte {
 	}
 	nc := len(byBit)
 	rowSize := off + (nc+7)/8
-	rgib[3] = rowSize
+	rgib[tciBM] = rowSize
 
 	all := append([]col(nil), byBit...)
 	sort.Slice(all, func(i, j int) bool {
@@ -370,18 +450,18 @@ func buildTC(cols []ColDef, rows []Row, sc *subCtx) [][]byte {
 
 	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
 
-	h := newHeap(0x7C)
-	infoHid, info := h.allocBuf(22 + 8*nc)
-	idxHid, idxHdr := h.allocBuf(8)
+	h := newHeap(clientSigTC)
+	infoHid, info := h.allocBuf(tcInfoHdrSize + tcColDescSize*nc)
+	idxHid, idxHdr := h.allocBuf(bthHdrSize)
 
 	rowBuf := make([]byte, len(rows)*rowSize)
 	for ri, r := range rows {
 		rb := rowBuf[ri*rowSize : (ri+1)*rowSize]
 		ceb := rb[off:]
-		le.PutUint32(rb[0:], r.ID)
-		le.PutUint32(rb[4:], uint32(ri+1))
-		ceb[0] |= 0xC0
-		for i := 2; i < nc; i++ {
+		le.PutUint32(rb[rowIDOff:], r.ID)
+		le.PutUint32(rb[rowVerOff:], uint32(ri+1))
+		ceb[0] |= cebFixedBits
+		for i := firstUserBit; i < nc; i++ {
 			c := &byBit[i]
 			var cell []byte
 			for _, x := range r.Cells {
@@ -412,12 +492,12 @@ func buildTC(cols []ColDef, rows []Row, sc *subCtx) [][]byte {
 		}
 	}
 
-	idx := make([]byte, 8*len(rows))
+	idx := make([]byte, rowIdxRecSize*len(rows))
 	for i, r := range rows {
-		le.PutUint32(idx[8*i:], r.ID)
-		le.PutUint32(idx[8*i+4:], uint32(i))
+		le.PutUint32(idx[rowIdxRecSize*i:], r.ID)
+		le.PutUint32(idx[rowIdxRecSize*i+rowIdxKeySize:], uint32(i)) // dwRowIndex
 	}
-	h.bth(idxHdr, 4, 4, idx)
+	h.bth(idxHdr, rowIdxKeySize, rowIdxEntSize, idx)
 
 	var rowsHnid uint32
 	switch {
@@ -435,16 +515,16 @@ func buildTC(cols []ColDef, rows []Row, sc *subCtx) [][]byte {
 		rowsHnid = sc.putChunks(chunks)
 	}
 
-	info[0], info[1] = 0x7C, byte(nc)
+	info[0], info[tcColsOff] = clientSigTC, byte(nc)
 	for i, v := range rgib {
-		le.PutUint16(info[2+2*i:], uint16(v))
+		le.PutUint16(info[tcRgibOff+2*i:], uint16(v))
 	}
-	le.PutUint32(info[10:], idxHid)
-	le.PutUint32(info[14:], rowsHnid)
-	le.PutUint32(info[18:], 0)
+	le.PutUint32(info[tcRowIndexOff:], idxHid)
+	le.PutUint32(info[tcRowsOff:], rowsHnid)
+	le.PutUint32(info[tcHidIndexOff:], 0)
 	for i := range all {
 		c := &all[i]
-		d := info[22+8*i:]
+		d := info[tcInfoHdrSize+tcColDescSize*i:]
 		le.PutUint32(d, uint32(c.ID)<<16|uint32(c.Type))
 		le.PutUint16(d[4:], uint16(c.ib))
 		d[6] = byte(c.size)

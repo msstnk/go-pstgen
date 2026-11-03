@@ -31,7 +31,7 @@ func WriteSummary(path string, files []string) error {
 			return err
 		}
 		for _, c := range counts {
-			rows = append(rows, fmt.Sprintf("%s\t%s\t%d\n", file, c.Path, c.Count))
+			rows = append(rows, c.TSV(file)+"\n")
 		}
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)

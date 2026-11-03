@@ -4,7 +4,6 @@ import (
 	"math"
 	"math/rand"
 	"slices"
-	"sort"
 	"time"
 
 	"github.com/msstnk/go-pstgen/internal/config"
@@ -103,11 +102,7 @@ func planMessages(rng *rand.Rand, cfg config.Config, target int64, holds bool) (
 		n++
 	}
 	for _, l := range plan {
-		sortPlanned(l)
+		slices.SortFunc(l, func(a, b planned) int { return a.ts.Compare(b.ts) })
 	}
 	return plan, n, total
-}
-
-func sortPlanned(l []planned) {
-	sort.Slice(l, func(i, j int) bool { return l[i].ts.Before(l[j].ts) })
 }

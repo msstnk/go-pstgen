@@ -27,7 +27,7 @@ type heapPages struct {
 
 func (f *File) loadHeap(data uint64) (*heapPages, error) {
 	h := &heapPages{}
-	if data&2 == 0 {
+	if data&bidInternal == 0 {
 		h.bids = []uint64{data}
 	} else {
 		xb, err := f.readBlock(data)
@@ -167,11 +167,11 @@ func (f *File) loadTable(e nbtEntry) (*tableInfo, error) {
 	}
 	hn := heapNode(h.pages)
 	b := h.pages[0]
-	if len(b) < 12 || b[2] != 0xEC || b[3] != 0x7C {
+	if len(b) < 12 || b[2] != hnSig || b[3] != clientSigTC {
 		return nil, fmt.Errorf("not a Table Context")
 	}
 	t := &tableInfo{h: h, infoHid: le.Uint32(b[4:])}
-	if t.info, err = hn.alloc(t.infoHid); err != nil || len(t.info) < 22 || t.info[0] != 0x7C {
+	if t.info, err = hn.alloc(t.infoHid); err != nil || len(t.info) < tcInfoHdrSize || t.info[0] != clientSigTC {
 		return nil, fmt.Errorf("bad TCINFO")
 	}
 	t.rowSize = int(le.Uint16(t.info[8:]))
@@ -180,7 +180,7 @@ func (f *File) loadTable(e nbtEntry) (*tableInfo, error) {
 	}
 	t.idxHid, t.rowsHnid = le.Uint32(t.info[10:]), le.Uint32(t.info[14:])
 	bth, err := hn.alloc(t.idxHid)
-	if err != nil || len(bth) < 8 || bth[0] != 0xB5 || bth[1] != 4 || bth[2] != 4 {
+	if err != nil || len(bth) < 8 || bth[0] != clientSigBTH || bth[1] != rowIdxKeySize || bth[2] != rowIdxEntSize {
 		return nil, fmt.Errorf("bad row index BTH")
 	}
 	if root := le.Uint32(bth[4:]); root != 0 {
@@ -199,7 +199,7 @@ type matrix struct {
 }
 
 func (f *File) loadMatrix(e nbtEntry, t *tableInfo) (*matrix, error) {
-	if t.rowsHnid&0x1F != 0x1F {
+	if t.rowsHnid&nidTypeMask != nidLTP {
 		return nil, fmt.Errorf("row matrix HNID %#x is neither an HID nor an LTP subnode", t.rowsHnid)
 	}
 	dbid, ok, err := f.subnode(e.sub, t.rowsHnid)
@@ -207,7 +207,7 @@ func (f *File) loadMatrix(e nbtEntry, t *tableInfo) (*matrix, error) {
 		return nil, fmt.Errorf("row matrix subnode %#x not found: %v", t.rowsHnid, err)
 	}
 	m := &matrix{kids: []uint64{dbid}}
-	if dbid&2 != 0 {
+	if dbid&bidInternal != 0 {
 		m.xbid = dbid
 		xb, err := f.readBlock(dbid)
 		if err != nil {
@@ -267,7 +267,7 @@ func (f *File) removeTableRows(e nbtEntry, ids map[uint32]bool) (removed int, dr
 	var rows []byte
 	var mx *matrix
 	var kidData [][]byte
-	if t.rowsHnid&0x1F == 0 {
+	if t.rowsHnid&nidTypeMask == 0 {
 		if rows, err = hn.alloc(t.rowsHnid); err != nil {
 			return 0, nil, err
 		}
@@ -356,12 +356,12 @@ func (f *File) removeTableRows(e nbtEntry, ids map[uint32]bool) (removed int, dr
 		}
 		drop = mx.kids[m:]
 		if mx.xbid != 0 {
-			xb := make([]byte, 8+8*m)
-			xb[0], xb[1] = 0x01, 0x01
+			xb := make([]byte, internalHdrSize+bidSize*m)
+			xb[0], xb[1] = btypeXBlock, levelXBlock
 			le.PutUint16(xb[2:], uint16(m))
 			le.PutUint32(xb[4:], uint32(total))
 			for j := 0; j < m; j++ {
-				le.PutUint64(xb[8+8*j:], mx.kids[j])
+				le.PutUint64(xb[internalHdrSize+bidSize*j:], mx.kids[j])
 			}
 			f.stage(mx.xbid, xb)
 		}
@@ -377,8 +377,8 @@ func (f *File) clearTableCell(e nbtEntry, rowID uint32, tag, typ uint16) error {
 		return err
 	}
 	ibData, cb, ibit := -1, 0, 0
-	for i := 0; i < int(t.info[1]) && 22+8*(i+1) <= len(t.info); i++ {
-		d := t.info[22+8*i:]
+	for i := 0; i < int(t.info[1]) && tcInfoHdrSize+tcColDescSize*(i+1) <= len(t.info); i++ {
+		d := t.info[tcInfoHdrSize+tcColDescSize*i:]
 		if le.Uint32(d) == uint32(tag)<<16|uint32(typ) {
 			ibData, cb, ibit = int(le.Uint16(d[4:])), int(d[6]), int(d[7])
 		}
@@ -397,9 +397,9 @@ func (f *File) clearTableCell(e nbtEntry, rowID uint32, tag, typ uint16) error {
 	if idx < 0 || idx >= t.n {
 		return nil
 	}
-	cebOff := int(le.Uint16(t.info[6:])) + ibit/8 // TCI_1b ends where the existence bitmap starts
+	cebOff := int(le.Uint16(t.info[tcRgibOff+2*(tciBM-1):])) + ibit/8 // TCI_1b ends where the CEB starts ([MS-PST] 2.3.4.4.1)
 	exists := func(row []byte) bool { return row[cebOff]&(0x80>>(ibit%8)) != 0 }
-	if t.rowsHnid&0x1F == 0 {
+	if t.rowsHnid&nidTypeMask == 0 {
 		pg := int(t.rowsHnid >> 16)
 		s, _, err := hnRange(t.h.pages[pg], t.rowsHnid)
 		if err != nil {

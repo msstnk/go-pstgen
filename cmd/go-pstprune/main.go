@@ -67,7 +67,7 @@ func main() {
 				continue
 			}
 			for _, c := range counts {
-				fmt.Printf("%s\t%s\t%d\n", file, c.Path, c.Count)
+				fmt.Println(c.TSV(file))
 			}
 		}
 		if failed > 0 {

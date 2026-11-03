@@ -6,23 +6,55 @@ import (
 	"time"
 )
 
-// NID types
+// NID types ([MS-PST] 2.2.2.1, NID_TYPE) and the fixed NIDs ([MS-PST] 2.4.1)
 const (
-	nidInternal   = 0x01
-	nidFolder     = 0x02
-	nidMessage    = 0x04
-	nidAttachment = 0x05
-	nidHierarchy  = 0x0D
-	nidContents   = 0x0E
-	nidAssoc      = 0x0F
-	nidAttachTbl  = 0x11
-	nidRecipTbl   = 0x12
+	nidInternal       = 0x01 // NID_TYPE_INTERNAL
+	nidFolder         = 0x02 // NID_TYPE_NORMAL_FOLDER
+	nidSearchFolder   = 0x03 // NID_TYPE_SEARCH_FOLDER
+	nidMessage        = 0x04 // NID_TYPE_NORMAL_MESSAGE
+	nidAttachment     = 0x05 // NID_TYPE_ATTACHMENT
+	nidAssocMessage   = 0x08 // NID_TYPE_ASSOC_MESSAGE (folder-associated message)
+	nidHierarchy      = 0x0D // NID_TYPE_HIERARCHY_TABLE
+	nidContents       = 0x0E // NID_TYPE_CONTENTS_TABLE
+	nidAssoc          = 0x0F // NID_TYPE_ASSOC_CONTENTS_TABLE
+	nidSearchContents = 0x10 // NID_TYPE_SEARCH_CONTENTS_TABLE
+	nidAttachTbl      = 0x11 // NID_TYPE_ATTACHMENT_TABLE
+	nidRecipTbl       = 0x12 // NID_TYPE_RECIPIENT_TABLE
+	nidLTP            = 0x1F // NID_TYPE_LTP
 
-	nidMessageStore = 0x21
-	nidNameToID     = 0x61
-	nidRootFolder   = 0x122
-	nidRecipTable   = 0x692
-	nidAttachTable  = 0x671
+	nidTypeBits = 5    // an NID is nidIndex<<nidTypeBits | nidType ([MS-PST] 2.2.2.1)
+	nidTypeMask = 0x1F // (1<<nidTypeBits)-1
+	// Subnode NIDs (attachments, LTP subnodes) are local to their parent node ([MS-PST] 2.2.2.8.3.3), so their index starts at 0x401 as well.
+	firstSubIdx = 0x401
+
+	// HEADER.rgnid starting nidIndex per NID type ([MS-PST] 2.2.2.6): the last index allocated in a blank file,
+	// so the first NID handed out has index start+1.
+	nidStartFolder   = 0x400
+	nidStartSearch   = 0x4000
+	nidStartMessage  = 0x10000
+	nidStartAssocMsg = 0x8000
+	nidStartOther    = 0x400
+
+	// HID ([MS-PST] 2.3.1.1): hidType (always 0) in the low 5 bits, then the 11-bit hidIndex, then the 16-bit hidBlockIndex.
+	hidTypeMask = 0x1F
+	hidIdxShift = 5
+	hidIdxMask  = 0x7FF
+
+	nidMessageStore = 0x21  // NID_MESSAGE_STORE
+	nidNameToID     = 0x61  // NID_NAME_TO_ID_MAP
+	nidRootFolder   = 0x122 // NID_ROOT_FOLDER
+	nidRecipTable   = 0x692 // NID_TYPE_RECIPIENT_TABLE template ([MS-PST] 2.4.4.5)
+	nidAttachTable  = 0x671 // NID_TYPE_ATTACHMENT_TABLE template ([MS-PST] 2.4.6.1)
+)
+
+// Property IDs ([MS-OXPROPS]) used outside the generated property lists.
+const (
+	pidDisplayName   = 0x3001 // PidTagDisplayName
+	pidContentCount  = 0x3602 // PidTagContentCount
+	pidContentUnread = 0x3603 // PidTagContentUnreadCount
+	pidSubfolders    = 0x360A // PidTagSubfolders
+	pidAssocContent  = 0x3617 // PidTagAssociatedContentCount
+	pidIpmSubTreeEID = 0x35E0 // PidTagIpmSubTreeEntryId
 )
 
 // FileTime returns a FILETIME (100 ns units since 1601-01-01).
@@ -208,7 +240,7 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 	if len(m.Attachments) > 0 {
 		var arows []Row
 		for i, a := range m.Attachments {
-			anid := uint32(0x401+i)<<5 | nidAttachment
+			anid := uint32(firstSubIdx+i)<<nidTypeBits | nidAttachment
 			asc := newSubCtx(w)
 			props := []Prop{
 				PInt32(0x0E20, int32(len(a.Data))), PInt32(0x0E21, int32(i)),
@@ -290,7 +322,7 @@ func (s *Store) writeFolder(f *Folder) {
 		w.PutNode(nid, parent, ch, sc.subs)
 	}
 
-	base := nid &^ 0x1F
+	base := nid &^ nidTypeMask
 	if f.verbatim {
 		return // hierarchy/content/FAI tables are also emitted from the skeleton
 	}

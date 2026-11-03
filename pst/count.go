@@ -12,6 +12,11 @@ type FolderCount struct {
 	Count int
 }
 
+// TSV is the line "file<TAB>folder<TAB>count" (without newline) for a folder of the PST at file.
+func (c FolderCount) TSV(file string) string {
+	return fmt.Sprintf("%s\t%s\t%d", file, c.Path, c.Count)
+}
+
 // CountItems returns, for every folder holding at least one message, the number of messages directly in it (subfolders are
 // not included, so nothing is counted twice). Folder-associated messages (FAI) are not counted. The file is opened read-only.
 // Folders are returned in hierarchy order: depth first, siblings sorted by name.
@@ -32,7 +37,7 @@ func CountItems(filePath string) ([]FolderCount, error) {
 		if e.parent == 0 || e.parent == e.nid {
 			continue
 		}
-		switch e.nid & 0x1F {
+		switch e.nid & nidTypeMask {
 		case nidFolder:
 			subs[e.parent] = append(subs[e.parent], e.nid)
 		case nidMessage:
