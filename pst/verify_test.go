@@ -110,7 +110,13 @@ func (r *pstReader) walk(ib uint64, ptype byte, level int) {
 		prev = key
 		switch {
 		case lvl > 0:
-			r.walk(le.Uint64(e[16:]), ptype, lvl-1)
+			cib := le.Uint64(e[16:])
+			r.walk(cib, ptype, lvl-1)
+			if cib+pageSize <= uint64(len(r.b)) && r.b[cib+489-1+0] == r.b[cib+488] && int(r.b[cib+488]) > 0 {
+				if ck := le.Uint64(r.b[cib:]); ck != key {
+					r.errf("page @%#x: btkeyMin %#x, child @%#x starts at %#x", ib, key, cib, ck)
+				}
+			}
 		case ptype == 0x80:
 			r.bbt[key&^1] = bbtEnt{bid: key &^ 1, ib: le.Uint64(e[8:]), cb: le.Uint16(e[16:])}
 		default:
@@ -290,6 +296,9 @@ func (r *pstReader) newHN(name string, blocks [][]byte, subs map[uint32]Sub) *hn
 			r.errf("%s: HN block %d first item at %d, want %d", name, i, offs[0], hdr)
 		}
 		bad := int(offs[n]) > pm
+		if pm&1 != 0 || pm-int(offs[n]) > 1 {
+			r.errf("%s: HN block %d ibHnpm %d is odd or leaves a gap after the last allocation (%d)", name, i, pm, offs[n])
+		}
 		for k := 1; k <= n; k++ {
 			bad = bad || offs[k] < offs[k-1]
 		}

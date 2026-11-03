@@ -1,9 +1,11 @@
 package pst
 
 import (
+	"crypto/md5"
 	"encoding/hex"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // NID types ([MS-PST] 2.2.2.1, NID_TYPE) and the fixed NIDs ([MS-PST] 2.4.1)
@@ -84,6 +86,7 @@ type Message struct {
 
 type contentRow struct {
 	nid                  uint32
+	convID               []byte // PidTagConversationId, nil if the subject is empty
 	class                string
 	subject, sender      string
 	displayTo, displayCc string
@@ -201,6 +204,60 @@ func oneOffEntryID(p Person) []byte {
 // searchKey is the PidTagSearchKey of a recipient: "SMTP:" and the upper-cased address, null-terminated.
 func searchKey(p Person) []byte { return []byte("SMTP:" + strings.ToUpper(p.Addr) + "\x00") }
 
+// messageSearchKey is a message's PidTagSearchKey (16 bytes, unique per message); ScanPST reports messages without one.
+func messageSearchKey(nid uint32) []byte {
+	b := make([]byte, 16)
+	le.PutUint32(b, nid)
+	le.PutUint32(b[4:], nid*2654435761)
+	le.PutUint64(b[8:], 0x9E3779B97F4A7C15^uint64(nid))
+	return b
+}
+
+// conversationID is PidTagConversationId (0x3013) of a message without a conversation index: the MD5 of the conversation topic
+// (here the subject), at most 255 UTF-16 code units, upper-cased and little-endian ([MS-OXOMSG] 2.2.1.2). Outlook computes the
+// same value when it opens the file (checked on every message of a file it had opened); nil if there is no topic.
+func conversationID(subject string) []byte {
+	u := utf16.Encode([]rune(strings.ToUpper(subject)))
+	if len(u) > 255 {
+		u = u[:255]
+	}
+	for i, c := range u {
+		if c == 0 {
+			u = u[:i]
+			break
+		}
+	}
+	if len(u) == 0 {
+		return nil
+	}
+	b := make([]byte, 2*len(u))
+	for i, c := range u {
+		le.PutUint16(b[2*i:], c)
+	}
+	sum := md5.Sum(b)
+	return sum[:]
+}
+
+// bodyPrefix is PidTagPstBodyPrefix (0x6619): the first 496 UTF-16 code units of the body without trailing white space. Outlook
+// writes this into its contents tables when it opens a file whose messages do not have it, and ScanPST then reports the rows
+// as not matching the messages; the length and trimming are those seen in a file Outlook had opened (no specification found).
+func bodyPrefix(body string) string {
+	const maxUnits = 496
+	n, units := 0, 0
+	for i, r := range body {
+		w := 1
+		if r >= 0x10000 {
+			w = 2
+		}
+		if units+w > maxUnits {
+			break
+		}
+		units += w
+		n = i + len(string(r))
+	}
+	return strings.TrimRight(body[:n], " \t\r\n")
+}
+
 func i32(v int32) []byte {
 	b := make([]byte, 4)
 	le.PutUint32(b, uint32(v))
@@ -227,6 +284,7 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 	w := s.w
 	nid := w.NewNID(nidMessage)
 	sc := newSubCtx(w)
+	start := w.dataBytes // the size of the message is the data written from here on (subnodes, then the PC)
 
 	// Recipient table: a TC whose columns are those of the recipient table template ([MS-PST] 2.4.5.3). PidTagRecipientType is
 	// 1 (To) or 2 (Cc), PidTagObjectType 6 (a recipient).
@@ -248,25 +306,31 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 
 	// Attachments: each is an attachment object (a PC, [MS-PST] 2.4.6.2) in a subnode of the message with its own NID, plus a row in
 	// the attachment table ([MS-PST] 2.4.6.1) whose row ID is that NID ([MS-PST] 2.4.6.1.3). The data is PidTagAttachDataBinary.
-	size := int32(len(m.Body)*2 + MessageBaseSize)
+	var size int32 // PidTagMessageSize, filled in when the message PC is laid out
 	if len(m.Attachments) > 0 {
 		var arows []Row
 		for i, a := range m.Attachments {
 			anid := uint32(firstSubIdx+i)<<nidTypeBits | nidAttachment
 			asc := newSubCtx(w)
 			props := []Prop{
-				PInt32(0x0E20, int32(len(a.Data))), PInt32(0x0E21, int32(i)),
+				PInt32(0x0E20, 0), PInt32(0x0E21, int32(i)),
 				PStr(0x3001, a.Name), PBin(0x3701, a.Data), PStr(0x3704, a.Name),
 				PInt32(0x3705, 1), PStr(0x3707, a.Name), PInt32(0x370B, -1),
 				PStr(0x370E, "application/octet-stream"), PInt32(0x3714, 0),
 				PTime(0x3007, FileTime(m.Submit)), PTime(0x3008, FileTime(m.Submit)),
 			}
+			// PidTagAttachSize is the sum of the lengths of the attachment's property values (inline values count 4 or 8
+			// bytes, strings and the data their length, the heap structure not at all), which is what ScanPST checks.
+			var asize int32
+			for _, p := range props {
+				asize += int32(len(p.Data))
+			}
+			props[0] = PInt32(0x0E20, asize)
 			sc.addNode(anid, buildPC(props, asc), asc)
 			arows = append(arows, Row{ID: anid, Cells: []Cell{
-				cell(0x0E20, i32(int32(len(a.Data)))), cell(0x3704, UTF16LE(a.Name)),
+				cell(0x0E20, i32(asize)), cell(0x3704, UTF16LE(a.Name)),
 				cell(0x3705, i32(1)), cell(0x370B, i32(-1)),
 			}})
-			size += int32(len(a.Data)) + AttachmentSizeOverhead
 		}
 		asc := newSubCtx(w)
 		sc.addNode(nidAttachTable, buildTC(colsAttachment, arows, asc), asc)
@@ -295,15 +359,26 @@ func (s *Store) AddMessage(f *Folder, m *Message) {
 		PInt32(0x0E07, flags), PInt32(0x0E08, size), PInt32(0x0E17, 0), PBool(0x0E1B, hasAttach),
 		PStr(0x0E1D, m.Subject), PStr(0x1000, m.Body), PStr(0x1035, m.MessageID),
 		PTime(0x3007, sub), PTime(0x3008, dlv),
+		PBin(0x300B, messageSearchKey(nid)),
+	}
+	conv := conversationID(m.Subject)
+	if conv != nil {
+		props = append(props, PBin(0x3013, conv))
+	}
+	if pre := bodyPrefix(m.Body); pre != "" {
+		props = append(props, PStr(0x6619, pre))
 	}
 	if a := m.Appt; a != nil {
 		props = append(props, apptProps(a)...)
 	}
-	chunks := buildPC(props, sc)
+	chunks := buildPCSized(props, sc, 0x0E08, func(heap int) int32 {
+		size = int32(w.dataBytes-start) + int32(heap)
+		return size
+	})
 	w.PutNode(nid, f.NID, chunks, sc.subs)
 	s.rowSize += 128 + 2*int64(len(m.Subject)+len(m.Sender.Name)+len(toS)+len(ccS))
 	f.rows = append(f.rows, contentRow{
-		nid: nid, class: class, subject: m.Subject, sender: m.Sender.Name, displayTo: toS, displayCc: ccS,
+		nid: nid, convID: conv, class: class, subject: m.Subject, sender: m.Sender.Name, displayTo: toS, displayCc: ccS,
 		submit: sub, delivery: dlv, flags: flags, size: size, hasAttach: hasAttach,
 	})
 }
@@ -343,10 +418,16 @@ func (s *Store) writeFolder(f *Folder) {
 	}
 	var hrows []Row
 	for _, c := range f.Children {
-		hrows = append(hrows, Row{ID: c.NID, Cells: []Cell{
+		cells := []Cell{
 			cell(0x3001, UTF16LE(c.Name)), cell(0x3602, i32(int32(len(c.rows)))), cell(0x3603, i32(0)),
 			cell(0x360A, bl(len(c.Children) > 0)),
-		}})
+		}
+		if c.Class != "" {
+			// PidTagContainerClass is duplicated in the parent's hierarchy row ([MS-PST] 2.4.4.3); ScanPST flags the row
+			// as not matching the folder, and Outlook can then file calendar items under Mail, when it is missing.
+			cells = append(cells, cell(0x3613, UTF16LE(c.Class)))
+		}
+		hrows = append(hrows, Row{ID: c.NID, Cells: cells})
 	}
 	hsc := newSubCtx(w)
 	hch := buildTC(colsHierarchy, hrows, hsc)
@@ -356,11 +437,14 @@ func (s *Store) writeFolder(f *Folder) {
 	for i, r := range f.rows {
 		crows[i] = Row{ID: r.nid, Cells: []Cell{
 			cell(0x0017, i32(1)), cell(0x001A, UTF16LE(r.class)), cell(0x0036, i32(0)),
-			cell(0x0037, UTF16LE(r.subject)), cell(0x0039, i64(r.submit)), cell(0x0042, UTF16LE(r.sender)),
+			cell(0x0037, UTF16LE(r.subject)), cell(0x0039, i64(r.submit)), cell(0x0042, UTF16LE(r.sender)), cell(0x0070, UTF16LE(r.subject)),
 			cell(0x0E03, UTF16LE(r.displayCc)), cell(0x0E04, UTF16LE(r.displayTo)), cell(0x0E06, i64(r.delivery)),
 			cell(0x0E07, i32(r.flags)), cell(0x0E08, i32(r.size)), cell(0x0E17, i32(0)),
 			cell(0x3008, i64(r.delivery)),
 		}}
+		if r.convID != nil {
+			crows[i].Cells = append(crows[i].Cells, cell(0x3013, r.convID))
+		}
 	}
 	csc := newSubCtx(w)
 	cch := buildTC(colsContents, crows, csc)
@@ -370,7 +454,8 @@ func (s *Store) writeFolder(f *Folder) {
 	w.PutNode(base|nidAssoc, 0, ach, asc.subs)
 }
 
-// PidTagMessageSize (0x0E08) is MessageBaseSize + 2*len(body), plus len(data) + AttachmentSizeOverhead per attachment.
+// PidTagMessageSize (0x0E08) is the total length of the data blocks of the node and its subnodes, which is what ScanPST recomputes
+// (PidTagAttachSize is the sum of the attachment's property value lengths). MessageBaseSize and AttachmentSizeOverhead are only the planner's model of the overhead (gen/plan.go).
 const (
 	MessageBaseSize        = 1024
 	AttachmentSizeOverhead = 512

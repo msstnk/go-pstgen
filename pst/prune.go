@@ -317,6 +317,12 @@ func Prune(filePath string, opt PruneOptions) (out *PruneResult, retErr error) {
 	if !f.nbt.remove(delNodes) || !f.bbt.remove(delBlocks) {
 		return nil, errors.New("pruning would empty a B-Tree")
 	}
+	// Resolve every block first: a damaged BBT must fail before the first byte is written.
+	for bid := range f.pending {
+		if _, err := f.blockRef(bid); err != nil {
+			return nil, err
+		}
+	}
 	for bid, data := range f.pending {
 		if err := f.writeBlock(bid, data); err != nil {
 			return nil, err

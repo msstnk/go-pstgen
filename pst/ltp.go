@@ -253,13 +253,14 @@ const (
 )
 
 // bth builds a BTree-on-Heap ([MS-PST] 2.3.2) from recs (concatenated fixed-length records in ascending key order) and fills hdr (BTHHEADER).
-func (h *heap) bth(hdr []byte, cbKey, cbEnt int, recs []byte) {
+// It returns the heap items holding the leaf records, in order.
+func (h *heap) bth(hdr []byte, cbKey, cbEnt int, recs []byte) (leaves [][]byte) {
 	rs := cbKey + cbEnt
 	n := len(recs) / rs
 	hdr[0], hdr[1], hdr[2], hdr[bthIdxLevels] = clientSigBTH, byte(cbKey), byte(cbEnt), 0
 	le.PutUint32(hdr[bthRootOff:], 0)
 	if n == 0 {
-		return
+		return nil
 	}
 	type node struct {
 		hid uint32
@@ -271,6 +272,7 @@ func (h *heap) bth(hdr []byte, cbKey, cbEnt int, recs []byte) {
 		j := min(n, i+per)
 		hid, b := h.allocBuf((j - i) * rs)
 		copy(b, recs[i*rs:j*rs])
+		leaves = append(leaves, b)
 		cur = append(cur, node{hid, recs[i*rs : i*rs+cbKey]})
 	}
 	ir := cbKey + bthHIDSize
@@ -290,6 +292,7 @@ func (h *heap) bth(hdr []byte, cbKey, cbEnt int, recs []byte) {
 		cur = next
 	}
 	le.PutUint32(hdr[bthRootOff:], cur[0].hid)
+	return leaves
 }
 
 // ---- Property Context ----
@@ -314,11 +317,23 @@ const (
 
 // buildPC returns the NDB block sequence of a Property Context ([MS-PST] 2.3.3). Large values are moved out to subnodes of sc.
 func buildPC(props []Prop, sc *subCtx) [][]byte {
+	return buildPCSized(props, sc, 0, nil)
+}
+
+// buildPCSized is buildPC where the value of the Integer32 property sizeTag is computed after the node is laid out:
+// size(heapBytes) gets the total length of the PC's heap blocks and returns the value. ScanPST recomputes PidTagMessageSize and
+// PidTagAttachSize as the total size of the data blocks of the node and its subnodes, so these are not estimates. The heap size
+// does not depend on the value (it is inline).
+func buildPCSized(props []Prop, sc *subCtx, sizeTag uint16, size func(heapBytes int) int32) [][]byte {
 	sort.Slice(props, func(i, j int) bool { return props[i].ID < props[j].ID })
 	h := newHeap(clientSigPC)
 	hdrHid, hdr := h.allocBuf(bthHdrSize)
 	recs := make([]byte, pcRecSize*len(props))
+	sizeRec := -1
 	for i, p := range props {
+		if size != nil && p.ID == sizeTag {
+			sizeRec = i
+		}
 		r := recs[pcRecSize*i:]
 		le.PutUint16(r, p.ID)
 		le.PutUint16(r[2:], p.Type)
@@ -338,8 +353,18 @@ func buildPC(props []Prop, sc *subCtx) [][]byte {
 		}
 		le.PutUint32(r[4:], v)
 	}
-	h.bth(hdr, pcKeySize, pcEntSize, recs)
-	return h.finish(hdrHid)
+	leaves := h.bth(hdr, pcKeySize, pcEntSize, recs)
+	out := h.finish(hdrHid)
+	if sizeRec >= 0 {
+		n := 0
+		for _, b := range out {
+			n += len(b)
+		}
+		per := maxHeapItem / (pcKeySize + pcEntSize)
+		leaf := leaves[sizeRec/per]
+		le.PutUint32(leaf[(sizeRec%per)*(pcKeySize+pcEntSize)+4:], uint32(size(n)))
+	}
+	return out
 }
 
 // ---- Table Context ----
