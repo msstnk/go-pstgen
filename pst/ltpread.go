@@ -193,7 +193,7 @@ func (f *File) subnode(sub uint64, nid uint32) (uint64, bool, error) {
 			if le.Uint64(b[internalHdrSize+siEntSize*i:]) > uint64(nid) {
 				break
 			}
-			next = le.Uint64(b[16+16*i:])
+			next = le.Uint64(b[internalHdrSize+siEntSize*i+bidSize:])
 		}
 		sub = next
 	}

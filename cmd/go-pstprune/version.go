@@ -6,5 +6,3 @@ import "github.com/msstnk/go-pstgen/internal/buildinfo"
 const version = "v0.1.7"
 
 var credit = buildinfo.Credit("go-pstprune", version, "PST folder pruner")
-
-func versionString() string { return buildinfo.String(version) }

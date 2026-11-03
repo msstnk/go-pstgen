@@ -4,7 +4,6 @@ package pst
 import (
 	"bufio"
 	"encoding/binary"
-	"fmt"
 	"hash/crc32"
 	"os"
 	"sort"
@@ -588,5 +587,3 @@ func (w *Writer) Finish() error {
 
 // Abort closes the file on error.
 func (w *Writer) Abort() { w.f.Close() }
-
-func (w *Writer) String() string { return fmt.Sprintf("pst.Writer{off=%d}", w.off) }

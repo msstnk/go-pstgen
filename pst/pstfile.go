@@ -394,7 +394,7 @@ func xblockKids(bid uint64, b []byte) ([]uint64, error) {
 	}
 	kids := make([]uint64, n)
 	for i := range kids {
-		kids[i] = le.Uint64(b[8+8*i:])
+		kids[i] = le.Uint64(b[internalHdrSize+bidSize*i:])
 	}
 	return kids, nil
 }
@@ -443,7 +443,7 @@ func (f *File) walkSub(bid uint64, visit func(uint64)) error {
 			return fmt.Errorf("block %#x: truncated SLBLOCK", bid)
 		}
 		for i := 0; i < n; i++ {
-			e := b[8+24*i:]
+			e := b[internalHdrSize+slEntSize*i:]
 			if err := f.walkData(le.Uint64(e[8:]), visit); err != nil {
 				return err
 			}
@@ -453,11 +453,11 @@ func (f *File) walkSub(bid uint64, visit func(uint64)) error {
 		}
 		return nil
 	}
-	if 8+16*n > len(b) {
+	if internalHdrSize+siEntSize*n > len(b) {
 		return fmt.Errorf("block %#x: truncated SIBLOCK", bid)
 	}
 	for i := 0; i < n; i++ {
-		if err := f.walkSub(le.Uint64(b[16+16*i:]), visit); err != nil {
+		if err := f.walkSub(le.Uint64(b[internalHdrSize+siEntSize*i+bidSize:]), visit); err != nil {
 			return err
 		}
 	}
@@ -491,9 +491,9 @@ func (f *File) writeBlock(bid uint64, data []byte) error {
 	}
 	t := buf[len(buf)-blockTrailerSize:]
 	le.PutUint16(t[0:], uint16(len(data)))
-	le.PutUint16(t[2:], sig(r.ib, bid))
-	le.PutUint32(t[4:], pstCRC(buf[:len(data)]))
-	le.PutUint64(t[8:], bid)
+	le.PutUint16(t[trailerSigOff:], sig(r.ib, bid))
+	le.PutUint32(t[trailerCRCOff:], pstCRC(buf[:len(data)]))
+	le.PutUint64(t[trailerBIDOff:], bid)
 	if _, err := f.f.WriteAt(buf, int64(r.ib)); err != nil {
 		return err
 	}

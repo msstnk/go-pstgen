@@ -243,3 +243,31 @@ func TestSampleMeeting(t *testing.T) {
 		}
 	}
 }
+
+func TestFolderParentsPrecedeChildren(t *testing.T) {
+	for child, parent := range folderParents {
+		pi, ci := slices.Index(folderNames, parent), slices.Index(folderNames, child)
+		if pi < 0 || ci < 0 || pi >= ci {
+			t.Errorf("parent %q of %q must come before it in folderNames", parent, child)
+		}
+		if slices.Contains(holdFolders, parent) {
+			t.Errorf("parent %q of %q must not be a hold folder", parent, child)
+		}
+	}
+}
+
+func TestSampleMeetingTinyWindow(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	for m := 0; m < 24*60; m += 7 {
+		cfg := config.Default()
+		cfg.End = time.Date(2026, 3, 31, 0, m, 0, 0, time.UTC)
+		cfg.RangeDays, cfg.CalendarDaysAhead = 1, 0
+		lo := cfg.End.Add(-24 * time.Hour)
+		for range 20 {
+			start, dur, _ := sampleMeeting(rng, cfg)
+			if start.Before(lo) || start.After(cfg.End) || start.Add(dur).After(start.Truncate(24*time.Hour).Add(24*time.Hour)) {
+				t.Fatalf("end %v: bad meeting %v+%v", cfg.End, start, dur)
+			}
+		}
+	}
+}
