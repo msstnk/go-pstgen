@@ -151,3 +151,48 @@ func TestBlockRefRejectsOversizedCB(t *testing.T) {
 		t.Error("rawBlock accepted cb > blockMax")
 	}
 }
+
+// Prune zero-fills blocks at the position the BBT gives, so a block that lies (even partly) beyond the end of the file must be
+// refused by blockRef, and Prune must then fail without having written anything.
+func TestBlockRefRejectsOffsetOutsideFile(t *testing.T) {
+	p := buildPrunable(t, CryptNone)
+	f, err := openPST(p, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.close()
+	var bid uint64
+	f.bbt.each(func(e []byte) {
+		if bid == 0 {
+			bid = le.Uint64(e)
+		}
+	})
+	r, err := f.blockRef(bid)
+	if err != nil {
+		t.Fatalf("untouched entry: %v", err)
+	}
+	page, i := f.bbt.find(bid)
+	ent := page.buf[i*bbtEntSize+8:]
+	for name, ib := range map[string]uint64{
+		"exactly at the end of the file": f.size - r.total(),
+		"the original position":          r.ib,
+	} {
+		le.PutUint64(ent, ib)
+		if _, err := f.blockRef(bid); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, ib := range map[string]uint64{
+		"one byte past the end of the file": f.size - r.total() + 1,
+		"at the end of the file":            f.size,
+		"past the end of the file":          f.size + 1,
+		"far beyond":                        1 << 40,
+		"negative as an int64":              1 << 63,
+		"overflowing with the length":       ^uint64(0) - 8,
+	} {
+		le.PutUint64(ent, ib)
+		if _, err := f.blockRef(bid); err == nil {
+			t.Errorf("%s: ib %#x accepted", name, ib)
+		}
+	}
+}

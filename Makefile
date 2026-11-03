@@ -7,16 +7,24 @@ VERSION := $(shell sed -n 's/^const version = "\(.*\)"/\1/p' cmd/go-pstgen/versi
 GOBUILD := CGO_ENABLED=0 go build
 
 .DEFAULT_GOAL := help
-.PHONY: help build build-all clean
+.PHONY: help build build-all test test-full clean
 
 help:
 	@echo "Targets:"
 	@echo "  make build      build for this machine into bin/ (version $(VERSION))"
 	@echo "  make build-all  build for OSES='$(OSES)' x ARCHS='$(ARCHS)' into bin/<cmd>-$(VERSION)-<os>-<arch>[.exe]"
+	@echo "  make test       run the tests (about 5 s)"
+	@echo "  make test-full  also try every damaged byte of the structures the parsers read (about 40 s; run it after changing a parser)"
 	@echo "  make clean      remove bin/"
 
 build:
 	@for c in $(CMDS); do echo "building $$c ($$(go env GOOS)/$$(go env GOARCH))"; $(GOBUILD) -o bin/$$c ./cmd/$$c || exit 1; done
+
+test:
+	go test ./...
+
+test-full:
+	PST_CORRUPT_FULL=1 go test -count=1 ./...
 
 build-all:
 	@for os in $(OSES); do for arch in $(ARCHS); do \
