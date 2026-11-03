@@ -71,8 +71,14 @@ func Load(path string) (Config, error) {
 	if cfg.MinSizeKB < 1 || cfg.MaxSizeKB < cfg.MinSizeKB {
 		return cfg, fmt.Errorf("invalid min_size_kb/max_size_kb")
 	}
-	if cfg.MeanSizeKB < 1 {
-		return cfg, fmt.Errorf("invalid mean_size_kb (must be at least 1)")
+	if cfg.MaxSizeKB > maxMaxSizeKB {
+		return cfg, fmt.Errorf("invalid max_size_kb (must be at most %d)", maxMaxSizeKB)
+	}
+	if cfg.MeanSizeKB < cfg.MinSizeKB || cfg.MeanSizeKB > cfg.MaxSizeKB {
+		return cfg, fmt.Errorf("invalid mean_size_kb (must be between min_size_kb and max_size_kb)")
+	}
+	if cfg.MailboxMeanMB <= 0 {
+		return cfg, fmt.Errorf("invalid mailbox_mean_mb (must be greater than 0)")
 	}
 	if cfg.AttachmentRatio < 0 || cfg.AttachmentRatio > 1 {
 		return cfg, fmt.Errorf("invalid attachment_ratio (must be between 0 and 1)")
@@ -113,6 +119,9 @@ func Load(path string) (Config, error) {
 	}
 	return cfg, nil
 }
+
+// maxMaxSizeKB caps max_size_kb (256 MB): the generator's shared text/attachment pool is about 3.2 times max_size_kb in memory.
+const maxMaxSizeKB = 256 << 10
 
 // MeanBodyAttach returns the mean body size and the mean attachment size (when there is one) in bytes, such that
 // PidTagMessageSize averages mean_size_kb: MessageBaseSize + body + AttachmentRatio*(attachment + AttachmentSizeOverhead).

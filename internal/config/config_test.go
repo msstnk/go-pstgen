@@ -85,6 +85,15 @@ func TestLoadConfigValidation(t *testing.T) {
 		{"log variance negative", `{"mailbox_log_variance":-0.5}`},
 		{"calendar days negative", `{"calendar_days_ahead":-1}`},
 		{"bad crypt", `{"crypt_method":"rot13"}`},
+		{"mean size below 1", `{"mean_size_kb":0}`},
+		{"log variance negative (body)", `{"body_log_variance":-1}`},
+		{"log variance negative (size)", `{"log_variance":-1}`},
+		{"body mean zero", `{"body_mean_kb":0}`},
+		{"mailbox mean zero", `{"mailbox_mean_mb":0}`},
+		{"mailbox mean negative", `{"mailbox_mean_mb":-5}`},
+		{"mean above max", `{"mean_size_kb":200,"max_size_kb":100}`},
+		{"mean below min", `{"mean_size_kb":5,"min_size_kb":10}`},
+		{"max too large", `{"max_size_kb":1048576,"mean_size_kb":150}`},
 	}
 	for _, tt := range tests {
 		if _, err := Load(writeConfig(t, tt.body)); err == nil {

@@ -304,7 +304,8 @@ func inlineType(t uint16) bool {
 }
 
 // PC BTH record { wPropId u16, wPropType u16, dwValueHnid u32 }: cbKey 2, cbEnt 6 ([MS-PST] 2.3.3.3).
-// A value of at most 4 bytes is stored in dwValueHnid itself; a larger one is an HID (<= maxHeapItem) or a subnode NID.
+// A value of an inlineType type is stored in dwValueHnid itself; any other value is an HID (<= maxHeapItem) or a subnode NID,
+// even if it is 4 bytes or shorter.
 const (
 	pcKeySize = 2
 	pcEntSize = 6

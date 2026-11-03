@@ -171,7 +171,10 @@ func hnReplace(b []byte, hid uint32, data []byte) ([]byte, error) {
 
 // subnode looks up nid in a subnode tree (SLBLOCK / SIBLOCK, [MS-PST] 2.2.2.8.3.3) and returns its data BID.
 func (f *File) subnode(sub uint64, nid uint32) (uint64, bool, error) {
-	for sub != 0 {
+	for depth := 0; sub != 0; depth++ {
+		if depth > maxTreeDepth {
+			return 0, false, errTreeDepth(sub)
+		}
 		b, err := f.rawBlock(sub)
 		if err != nil {
 			return 0, false, err

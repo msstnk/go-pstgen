@@ -4,6 +4,7 @@ package pst
 import (
 	"bufio"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"os"
 	"sort"
@@ -119,7 +120,7 @@ const (
 	nidTypeCount    = 32     // NID_TYPE is a 5-bit value
 
 	// ROOT field offsets, relative to hdrRootOff.
-	rootEofOff       = 4  // ibFileEof
+	rootEOFOff       = 4  // ibFileEof
 	rootAMapLastOff  = 12 // ibAMapLast
 	rootAMapFreeOff  = 20 // cbAMapFree
 	rootPMapFreeOff  = 28 // cbPMapFree (deprecated, 0)
@@ -180,6 +181,9 @@ type Writer struct {
 var zeroBuf [pageSize * 2]byte
 
 func NewWriter(path string, bufSize int, crypt CryptMethod) (*Writer, error) {
+	if crypt > CryptCyclic {
+		return nil, fmt.Errorf("unknown crypt method %#x", byte(crypt))
+	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return nil, err
@@ -207,7 +211,7 @@ func nidStart(t uint32) uint32 {
 	return nidStartOther
 }
 
-// NewNID hands out an unused NID of the given type.
+// NewNID hands out an unused NID of the given type. t must be a 5-bit NID type (< 32), or it panics.
 func (w *Writer) NewNID(t uint32) uint32 {
 	i := w.nextIdx[t]
 	w.nextIdx[t]++
@@ -411,6 +415,7 @@ func (w *Writer) putSubs(subs []Sub) uint64 {
 }
 
 // PutNode writes a node's data and subnodes and registers it in the NBT ([MS-PST] 2.2.2.7.7.4).
+// Each chunk must fit one block, at most blockMax (8,176) bytes, or it panics.
 func (w *Writer) PutNode(nid, parent uint32, chunks [][]byte, subs []Sub) {
 	data := w.putChunks(chunks)
 	sub := w.putSubs(subs)
@@ -558,7 +563,7 @@ func (w *Writer) Finish() error {
 		le.PutUint32(h[hdrNIDOff+4*t:], w.nextIdx[t]-1) // rgnid holds the last allocated index
 	}
 	root := h[hdrRootOff:] // ROOT ([MS-PST] 2.2.2.5): EOF, last AMap, free space, and the BREFs of the NBT / BBT roots
-	le.PutUint64(root[rootEofOff:], eof)
+	le.PutUint64(root[rootEOFOff:], eof)
 	le.PutUint64(root[rootAMapLastOff:], w.amaps[len(w.amaps)-1])
 	le.PutUint64(root[rootAMapFreeOff:], amapFree)
 	le.PutUint64(root[rootPMapFreeOff:], 0)
@@ -585,5 +590,8 @@ func (w *Writer) Finish() error {
 	return w.f.Close()
 }
 
-// Abort closes the file on error.
-func (w *Writer) Abort() { w.f.Close() }
+// Abort closes the file and deletes it: after a failed Finish it is an incomplete PST.
+func (w *Writer) Abort() {
+	w.f.Close()
+	os.Remove(w.f.Name())
+}

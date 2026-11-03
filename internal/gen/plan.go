@@ -1,3 +1,4 @@
+// Package gen generates the dummy mailboxes: it plans the messages, builds their content and writes them out as PST files.
 package gen
 
 import (

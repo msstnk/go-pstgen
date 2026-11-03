@@ -159,14 +159,14 @@ Leave a key out and you get the default from the table below. A key that doesn't
 |---|---|---|
 | `output_dir` | `"./output"` | Output directory. Files are written flat as `<output_dir>/<UPN>.pst` (`<UPN>-2.pst`, `<UPN>-3.pst` ... when split) |
 | `mailboxes` | `["user01@example.com"]` | List of UPNs of the mailboxes to generate (empty is an error) |
-| `mailbox_mean_mb` | `1000` | Mean mailbox size in MB. A sampled size is clamped to between the larger of 10% of the mean and 1 MB, and 10 times the mean |
+| `mailbox_mean_mb` | `1000` | Mean mailbox size in MB (greater than 0). A sampled size is clamped to between the larger of 10% of the mean and 1 MB, and 10 times the mean |
 | `mailbox_stddev_mb` | `200` | Standard deviation of the mailbox size (MB). Ignored when `mailbox_log_variance` is set |
 | `mailbox_log_variance` | `null` | If set (greater than 0), mailbox sizes follow a log-normal distribution with this log variance instead of the normal one: a long tail toward large mailboxes while the mean stays `mailbox_mean_mb` (`mailbox_stddev_mb` is ignored). Around `1.0`-`1.3` looks realistic, but the spread of file sizes gets wide, so handle with care. If `null`, the normal distribution is used |
 | `workers` | number of CPUs | Parallelism (values below 1 become 1; capped at the number of mailboxes) |
 | `total_messages` | `0` | Number of messages per mailbox. If 0 or less, messages are generated until the size target is reached |
 | `min_size_kb` | `1` | Minimum size of a message (KB, at least 1) |
-| `max_size_kb` | `10240` | Maximum size of a message (KB, at least `min_size_kb`) |
-| `mean_size_kb` | `150` | Mean message size in KB, measured as `PidTagMessageSize` (see [Generation rules](#generation-rules)). The mean attachment size is derived from it |
+| `max_size_kb` | `10240` | Maximum size of a message (KB, at least `min_size_kb`, at most `262144`). Memory use grows with it: the shared text pool is about 3.2 times this |
+| `mean_size_kb` | `150` | Mean message size in KB (between `min_size_kb` and `max_size_kb`), measured as `PidTagMessageSize` (see [Generation rules](#generation-rules)). The mean attachment size is derived from it |
 | `log_variance` | `0.5` | Log variance of the attachment size |
 | `body_mean_kb` | `10` | Mean body size in KB. Must be smaller than `mean_size_kb` (ignored when `attachment_ratio` is 0, where the body takes the whole mean) |
 | `body_log_variance` | `1.0` | Log variance of the body size |

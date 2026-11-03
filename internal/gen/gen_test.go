@@ -271,3 +271,35 @@ func TestSampleMeetingTinyWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestSampleSizesLogVariance checks the shape of the distributions: the standard deviation of log(size) is sqrt(variance).
+func TestSampleSizesLogVariance(t *testing.T) {
+	for _, v := range []float64{0.25, 0.5, 1} {
+		for _, part := range []string{"body", "attachment"} {
+			cfg := config.Default()
+			cfg.MeanSizeKB, cfg.MinSizeKB, cfg.MaxSizeKB = 1000, 1, 1<<20 // large enough that no clamp applies
+			if part == "body" {
+				cfg.AttachmentRatio, cfg.BodyLogVariance = 0, v // the body takes the whole mean
+			} else {
+				cfg.AttachmentRatio, cfg.BodyLogVariance, cfg.LogVariance = 1, 0, v
+				cfg.BodyMeanKB = 10
+			}
+			rng := rand.New(rand.NewSource(1))
+			const n = 200000
+			var sum, sumSq float64
+			for i := 0; i < n; i++ {
+				body, attach := sampleSizes(rng, cfg)
+				x := math.Log(float64(body))
+				if part == "attachment" {
+					x = math.Log(float64(attach))
+				}
+				sum += x
+				sumSq += x * x
+			}
+			mean := sum / n
+			if sd, want := math.Sqrt(sumSq/n-mean*mean), math.Sqrt(v); math.Abs(sd-want) > 0.02 {
+				t.Errorf("%s, log variance %.2f: sd of log(size) = %.3f, want %.3f", part, v, sd, want)
+			}
+		}
+	}
+}
