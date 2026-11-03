@@ -53,7 +53,7 @@ func CountItems(filePath string) ([]FolderCount, error) {
 	name := func(nid uint32) string {
 		n, ok := names[nid]
 		if !ok {
-			n, _ = f.folderName(nid)
+			n, _ = f.folderName(nid) // an unreadable name is shown empty; counting must not fail on it
 			// keep the output one record per line
 			n = strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(n)
 			names[nid] = n

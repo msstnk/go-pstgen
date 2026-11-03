@@ -1,6 +1,8 @@
 package gen
 
 import (
+	"cmp"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -224,6 +226,7 @@ func Run(cfg config.Config) ([]string, error) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	completed := 0
+	var failures []error
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -233,6 +236,9 @@ func Run(cfg config.Config) ([]string, error) {
 				files, err := generate(cfg, corp, j)
 				if err != nil {
 					fmt.Printf("[%s] FAILED: %v\n", j.user, err)
+					mu.Lock()
+					failures = append(failures, fmt.Errorf("%s: %w", j.user, err))
+					mu.Unlock()
 					continue
 				}
 				written[i] = files
@@ -253,7 +259,8 @@ func Run(cfg config.Config) ([]string, error) {
 		files = append(files, w...)
 	}
 	if completed != len(jobs) {
-		return files, fmt.Errorf("%d of %d mailboxes failed", len(jobs)-completed, len(jobs))
+		slices.SortFunc(failures, func(a, b error) int { return cmp.Compare(a.Error(), b.Error()) })
+		return files, fmt.Errorf("%d of %d mailboxes failed: %w", len(jobs)-completed, len(jobs), errors.Join(failures...))
 	}
 	return files, nil
 }

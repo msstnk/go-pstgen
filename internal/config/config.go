@@ -157,9 +157,12 @@ func WriteTemplate(path string) error {
 		}
 		return err
 	}
-	if _, err := f.Write(append(data, '\n')); err != nil {
-		f.Close()
-		return err
+	_, err = f.Write(append(data, '\n'))
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	return f.Close()
+	if err != nil {
+		os.Remove(path) // a partial file would make a retry fail with "already exists"
+	}
+	return err
 }
