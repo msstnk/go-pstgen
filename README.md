@@ -147,7 +147,8 @@ Files are modified **in place**, so work on copies. Notes:
 - Each `--path` segment is a case-insensitive glob. Paths are tried from the root folder and from the top of the mailbox (`Top of Personal Folders`). A trailing `*` matches items as well as folders, like a file glob: `Recoverable-Items/*` prunes the subfolders and the messages directly in the folder, and keeps the (now empty) folder itself; `Recoverable-Items` prunes the folder too.
 - Blocks still referenced by a node you keep are never touched. Files with no match are skipped (exit code 0); any other error makes the exit code 1.
 - `--dry-run` reports what would be pruned without writing. The root and the top-level folder cannot be pruned.
-- The AMap and the file size are left as they are, so the file does not shrink. Unicode PST (wVer 23) only.
+- The blocks are zero-filled and dropped from the BBT, but the AMaps, `ROOT.cbAMapFree` and the density list are not updated, so the file does not shrink and the zeroed space still counts as allocated. Outlook opened and saved pruned files in this state (see [Tested environments](#tested-environments)) without reclaiming it; compacting the file in Outlook is the expected way to get the space back, but that is not verified here. `cRef` of blocks shared with a node you keep is not decremented, which can only over-count references.
+- Unicode PSTs only (wVer 23 or higher; ANSI files are rejected). Files with wVer 37, written by Outlook builds that support Windows Information Protection, are read like wVer 23, but data protected that way cannot be read, and no such file has been tested.
 - Verification is limited (see [Tested environments](#tested-environments)). Importing pruned files with a migration tool is not verified, so test the pruned output in your target environment before relying on it.
 
 ## config.json
@@ -361,6 +362,8 @@ A: No. Import tools parse byte counts, headers, and folder nodes, not literary p
 ### Microsoft specification and patents
 
 This is an independent implementation, written from the publicly available [MS-PST]: Outlook Personal Folders (.pst) File Format Specification. It is not affiliated with or endorsed by Microsoft. Microsoft, Outlook and Purview are trademarks of Microsoft Corporation.
+
+Section numbers in code comments (for example `[MS-PST] 2.2.2.7.5`) refer to the revision of 2025-02-18 (v20250218). `[MS-OXPROPS]` and `[MS-OXCDATA]` are cited for property definitions and the one-off EntryID. Section numbers can move between revisions, so check them against that revision.
 
 - The MIT License covers only the code in this repository. It grants no rights under any Microsoft patent, copyright or trademark; Microsoft reserves them.
 - [MS-PST] is covered by the [Microsoft Open Specification Promise](https://learn.microsoft.com/en-us/openspecs/dev_center/ms-devcentlp/1c24c7c8-28b0-4ce1-a47d-95fe1ff504bc), a personal promise to each implementer, not a license. It does not pass to downstream users through the MIT License; check its terms before redistributing or using this software commercially.

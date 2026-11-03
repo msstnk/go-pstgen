@@ -58,8 +58,11 @@ func (f *File) load() error {
 	if _, err := f.f.ReadAt(h, 0); err != nil || string(h[:4]) != pstMagic {
 		return fmt.Errorf("not a PST file")
 	}
-	if v := le.Uint16(h[hdrVerOff:]); v != verUnicode {
-		return fmt.Errorf("unsupported PST version %d (only Unicode, wVer 23)", v)
+	// Unicode PSTs have wVer >= 23 ([MS-PST] 2.2.2.6); 14 and 15 are ANSI. 37 is written by an Outlook that supports Windows
+	// Information Protection, whose data MAY be protected (and then cannot be read here). The spec describes no other layout
+	// for values above 23, so they are read like 23.
+	if v := le.Uint16(h[hdrVerOff:]); v < verUnicode {
+		return fmt.Errorf("unsupported PST version %d (only Unicode, wVer >= 23)", v)
 	}
 	if pstCRC(h[hdrMagicClientOff:hdrCRCPartialEnd]) != le.Uint32(h[hdrCRCPartialOff:]) || pstCRC(h[hdrMagicClientOff:hdrCRCFullEnd]) != le.Uint32(h[hdrCRCFullOff:]) {
 		return fmt.Errorf("header CRC mismatch")

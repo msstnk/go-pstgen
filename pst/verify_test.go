@@ -34,8 +34,8 @@ func readPST(path string) (*pstReader, error) {
 		return nil, fmt.Errorf("%s: not a PST", path)
 	}
 	r := &pstReader{b: b, crypt: CryptMethod(b[513]), bbt: map[uint64]bbtEnt{}, nbt: map[uint32]nbtEnt{}}
-	if v := le.Uint16(b[10:]); v != 23 {
-		r.errf("header: wVer %d, want 23", v)
+	if v := le.Uint16(b[10:]); v < 23 {
+		r.errf("header: wVer %d, want >= 23", v)
 	}
 	if pstCRC(b[8:479]) != le.Uint32(b[4:]) {
 		r.errf("header: dwCRCPartial mismatch")

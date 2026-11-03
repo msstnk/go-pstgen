@@ -113,7 +113,7 @@ const (
 	hdrCRCFullEnd     = hdrMagicClientOff + 516
 
 	magicClient     = 0x4D53 // wMagicClient
-	verUnicode      = 23     // wVer: Unicode PST (>= 23)
+	verUnicode      = 23     // wVer: Unicode PST (>= 23); the value the writer emits and the least the reader accepts
 	verClient       = 19     // wVerClient
 	platformWindows = 1      // bPlatformCreate / bPlatformAccess
 	sentinel        = 0x80   // bSentinel
@@ -516,8 +516,10 @@ func (w *Writer) Finish() error {
 			return err
 		}
 	}
-	// PMap / FMap / FPMap are obsolete but must be present with valid CRCs ([MS-PST] 2.2.2.7.3, 2.2.2.7.5, 2.2.2.7.6).
-	// Fill them with all 0xFF bits, following Outlook-created files.
+	// PMap / FMap / FPMap are obsolete but must be present with valid CRCs ([MS-PST] 2.2.2.7.3, 2.2.2.7.5, 2.2.2.7.6); readers
+	// SHOULD NOT use them (the DList is used instead). All bytes are 0xFF, as in the Outlook-created reference PST (PMap, and the FMap
+	// at AMap 128). FMap bytes are nominally the longest run of free bits of the corresponding AMap (2.2.2.7.5.1), which 0xFF does not
+	// express. The FPMap is not covered by any reference file (it first appears at AMap 8192, about 2 GB).
 	for _, m := range []struct {
 		ptype byte
 		pos   []uint64

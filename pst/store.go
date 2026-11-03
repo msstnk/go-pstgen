@@ -184,8 +184,9 @@ func joinNames(ps []Person) string {
 }
 
 // oneOffEntryID builds a one-off EntryID ([MS-OXCDATA] 2.2.5.1 One-Off EntryID Structure) so Outlook can show the SMTP address:
-// Flags (0), the fixed ProviderUID, Version and flags, then DisplayName, AddressType and EmailAddress as null-terminated UTF-16
-// strings. See ref/TODO.md about the flags bytes.
+// Flags (0), the fixed ProviderUID, Version (0) and a 16-bit flags word, then DisplayName, AddressType and EmailAddress as
+// null-terminated UTF-16 strings. The flags word is stored big-endian: 0x0080 = U (UTF-16 strings) with M clear (TNEF), written as
+// bytes 00 80. Outlook-created entries usually also set M (0x0180).
 func oneOffEntryID(p Person) []byte {
 	b := []byte{0, 0, 0, 0,
 		0x81, 0x2B, 0x1F, 0xA4, 0xBE, 0xA3, 0x10, 0x19, 0x9D, 0x6E, 0x00, 0xDD, 0x01, 0x0F, 0x54, 0x02,
