@@ -9,7 +9,7 @@ import (
 // Edits are staged in File.pending (plain block contents by BID) so that several edits of one table compose;
 // Prune writes the staged blocks at the end.
 
-// stage records new plain contents for a block.
+// stage records new plain contents for a block. The block keeps its BID; writeBlock encodes it again if the file is encrypted.
 func (f *File) stage(bid uint64, data []byte) {
 	if f.pending == nil {
 		f.pending = map[uint64][]byte{}
@@ -17,7 +17,7 @@ func (f *File) stage(bid uint64, data []byte) {
 	f.pending[bid] = data
 }
 
-// heapPages is the heap of a node: one block, or the data blocks of a single-level XBLOCK.
+// heapPages is the Heap-on-Node ([MS-PST] 2.3.1) of a node: one block, or the data blocks of a single-level XBLOCK.
 type heapPages struct {
 	xbid  uint64
 	bids  []uint64
@@ -111,7 +111,7 @@ func (f *File) clearPCValue(nid uint32, tag uint16) error {
 	return nil
 }
 
-// bthNode is a node of the single-key-size BTH (4-byte keys and values) used by the table row index.
+// bthNode is a node of the BTree-on-Heap ([MS-PST] 2.3.2) of a TC's RowIndex ([MS-PST] 2.3.4.3: dwRowID -> dwRowIndex), here with 4-byte keys and values (4-byte keys and values) used by the table row index.
 type bthNode struct {
 	hid  uint32
 	kids []*bthNode // nil for leaves
@@ -148,7 +148,7 @@ func (n *bthNode) leaves(fn func(*bthNode)) {
 	}
 }
 
-// tableInfo is the parsed head of a Table Context.
+// tableInfo is the parsed head of a Table Context ([MS-PST] 2.3.4): the TCINFO, the RowIndex BTH and the row matrix HNID.
 type tableInfo struct {
 	h        *heapPages
 	infoHid  uint32
@@ -192,7 +192,7 @@ func (f *File) loadTable(e nbtEntry) (*tableInfo, error) {
 	return t, nil
 }
 
-// matrix describes a row matrix stored in a subnode.
+// matrix describes a row matrix stored in a subnode: its data blocks hold whole rows only ([MS-PST] 2.3.4.4 Row Matrix).
 type matrix struct {
 	kids []uint64 // data blocks
 	xbid uint64   // XBLOCK bundling them, or 0

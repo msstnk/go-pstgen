@@ -5,9 +5,10 @@ import (
 	"unicode/utf16"
 )
 
-// Minimal LTP reader (Heap-on-Node, PC lookup) and the table row remover used by Prune.
+// Minimal LTP reader (Heap-on-Node, PC lookup) and the table row remover used by Prune. See [MS-PST] 2.3 (LTP layer).
 
-// hnRange returns the [start, end) range of heap allocation hid in the heap block b.
+// hnRange returns the [start, end) range of heap allocation hid in the heap block b: the HID's hidIndex selects an entry of the
+// HNPAGEMAP's rgibAlloc, which holds the start offsets, so allocation n ends where n+1 starts ([MS-PST] 2.3.1.1, 2.3.1.5).
 func hnRange(b []byte, hid uint32) (start, end int, err error) {
 	idx := int(hid>>hidIdxShift) & hidIdxMask
 	if hid&hidTypeMask != 0 || idx == 0 || len(b) < 2 {
@@ -29,7 +30,8 @@ func hnRange(b []byte, hid uint32) (start, end int, err error) {
 	return start, end, nil
 }
 
-// heapNode is the decrypted data blocks of a node that holds a Heap-on-Node.
+// heapNode is the decrypted data blocks of a node that holds a Heap-on-Node ([MS-PST] 2.3.1). The page of an HID is its
+// hidBlockIndex, the index of the data block in the node's data tree.
 type heapNode [][]byte
 
 // allocRange returns the heap page of hid and the [start, end) range of its allocation within that page.
@@ -50,7 +52,7 @@ func (h heapNode) alloc(hid uint32) ([]byte, error) {
 	return h[page][s:e], nil
 }
 
-// pcLocate finds a property of a Property Context and returns the heap page and offset of its 8-byte BTH record
+// pcLocate finds a property of a Property Context ([MS-PST] 2.3.3: the BTH under the HNHDR's hidUserRoot, keyed by property ID) and returns the heap page and offset of its 8-byte BTH record
 // (tag, type, 4-byte value / HNID).
 func (h heapNode) pcLocate(tag uint16) (page, off int, ok bool, err error) {
 	if len(h) == 0 || len(h[0]) < hnHdrSize || h[0][2] != hnSig || h[0][3] != clientSigPC {
@@ -122,7 +124,7 @@ func (f *File) heapNode(nid uint32) (heapNode, error) {
 	return heapNode(bs), nil
 }
 
-// folderName returns PidTagDisplayName of a folder.
+// folderName returns PidTagDisplayName of a folder: a PtypString value, UTF-16LE ([MS-PST] 2.3.3.3, [MS-OXCDATA] 2.11.1).
 func (f *File) folderName(nid uint32) (string, error) {
 	h, err := f.heapNode(nid)
 	if err != nil {
@@ -140,7 +142,8 @@ func (f *File) folderName(nid uint32) (string, error) {
 }
 
 // hnReplace returns a copy of the heap block b with allocation hid replaced by data (which may differ in length).
-// Later allocations are shifted and the HNPAGEMAP updated; HIDs are indexes, so nothing else needs fixing.
+// Later allocations are shifted and the rgibAlloc offsets of the HNPAGEMAP updated ([MS-PST] 2.3.1.5); HIDs are indexes, so nothing else
+// needs fixing. An allocation emptied to zero length counts as freed (cFree).
 func hnReplace(b []byte, hid uint32, data []byte) ([]byte, error) {
 	start, end, err := hnRange(b, hid)
 	if err != nil {

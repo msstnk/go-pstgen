@@ -29,6 +29,8 @@ type PruneResult struct {
 	Shared  int      // blocks kept because a retained node still references them
 }
 
+// A Folder object is four nodes that share one nidIndex and differ only in nidType: the folder PC and its hierarchy, contents and
+// FAI contents tables ([MS-PST] 2.4.4 Folders). Prune derives a folder's table NIDs from its NID that way.
 var (
 	rootNID     = uint32(nidRootFolder)
 	tableTypes  = []uint32{nidHierarchy, nidContents, nidAssoc, nidSearchContents}
@@ -213,7 +215,7 @@ func Prune(filePath string, opt PruneOptions) (*PruneResult, error) {
 		res.Rows += n
 	}
 	// Folders that lost all their items have a content count of zero: fix the folder properties and the folder's row
-	// in its parent's hierarchy table.
+	// in its parent's hierarchy table (the counts are duplicated in both, [MS-PST] 2.4.4.3 Data Duplication and Coherency Maintenance).
 	for p := range emptiedItems {
 		hier, hasHier := f.node(parentOf[p]&^nidTypeMask | nidHierarchy)
 		for _, tag := range []uint16{pidContentCount, pidContentUnread, pidAssocContent} {
@@ -365,7 +367,7 @@ func (f *File) ipmSubtree() uint32 {
 	if err != nil {
 		return 0
 	}
-	b, ok, err := h.pcBytes(pidIpmSubTreeEID) // PidTagIpmSubTreeEntryId; its EntryID ends with the folder NID ([MS-PST] 2.4.3)
+	b, ok, err := h.pcBytes(pidIpmSubTreeEID) // PidTagIpmSubTreeEntryId; bytes 20..23 of an EntryID are the NID ([MS-PST] 2.4.3.2 Mapping between EntryID and NID)
 	if err != nil || !ok || len(b) < 24 {
 		return 0
 	}

@@ -14,7 +14,8 @@ const (
 	bbtEntSize = 24
 )
 
-// File is an existing Unicode PST opened for inspection and in-place editing.
+// File is an existing Unicode PST opened for inspection and in-place editing. It reads the NDB layer ([MS-PST] 2.2): the
+// Node BTree and Block BTree reached from HEADER.root, and the blocks they locate.
 type File struct {
 	f       *os.File
 	crypt   CryptMethod
@@ -25,6 +26,7 @@ type File struct {
 	zeroes  [64 << 10]byte
 }
 
+// nbtEntry is a decoded NBTENTRY ([MS-PST] 2.2.2.7.7.4).
 type nbtEntry struct {
 	nid, parent uint32
 	data, sub   uint64
@@ -50,6 +52,7 @@ func openPST(path string, rw bool) (*File, error) {
 
 func (f *File) close() error { return f.f.Close() }
 
+// load validates the HEADER ([MS-PST] 2.2.2.6: dwMagic, wVer, both CRCs, bCryptMethod) and loads the BBT and NBT from ROOT.
 func (f *File) load() error {
 	h := make([]byte, headerSize)
 	if _, err := f.f.ReadAt(h, 0); err != nil || string(h[:4]) != pstMagic {
@@ -76,6 +79,8 @@ func (f *File) load() error {
 }
 
 // ---- B-Tree ----
+// Pages are BTPAGEs ([MS-PST] 2.2.2.7.7.1). Intermediate entries are BTENTRYs {btkey, BREF} ([MS-PST] 2.2.2.7.7.2), where btkey
+// is the smallest key under the child; leaf entries are NBTENTRYs or BBTENTRYs.
 
 type btPage struct {
 	ib    uint64
@@ -95,6 +100,7 @@ type btree struct {
 	pages []*btPage
 }
 
+// loadTree loads the BTree whose root page is at ib with BID bid. ent is its leaf entry size (nbtEntSize or bbtEntSize).
 func (f *File) loadTree(bid, ib uint64, ptype byte, ent int) (*btree, error) {
 	t := &btree{ptype: ptype, ent: ent}
 	root, err := f.loadPage(t, bid, ib, -1)
@@ -105,7 +111,7 @@ func (f *File) loadTree(bid, ib uint64, ptype byte, ent int) (*btree, error) {
 	return t, nil
 }
 
-// loadPage reads a page and, recursively, its children. level is the expected level (-1: unknown, for the root).
+// loadPage reads a page, checks its PAGETRAILER ([MS-PST] 2.2.2.7.1: ptype, dwCRC, bid) and, recursively, its children. level is the expected level (-1: unknown, for the root).
 func (f *File) loadPage(t *btree, bid, ib uint64, level int) (*btPage, error) {
 	p := &btPage{ib: ib}
 	if _, err := f.f.ReadAt(p.buf[:], int64(ib)); err != nil {
@@ -115,10 +121,10 @@ func (f *File) loadPage(t *btree, bid, ib uint64, level int) (*btPage, error) {
 	switch {
 	case tr[0] != t.ptype || tr[1] != t.ptype:
 		return nil, fmt.Errorf("page @%#x: bad page type %#x", ib, tr[0])
-	case pstCRC(p.buf[:pageTrailerOff]) != le.Uint32(tr[4:]):
+	case pstCRC(p.buf[:pageTrailerOff]) != le.Uint32(tr[trailerCRCOff:]):
 		return nil, fmt.Errorf("page @%#x: CRC mismatch", ib)
-	case le.Uint64(tr[8:]) != bid:
-		return nil, fmt.Errorf("page @%#x: BID %#x, want %#x", ib, le.Uint64(tr[8:]), bid)
+	case le.Uint64(tr[trailerBIDOff:]) != bid:
+		return nil, fmt.Errorf("page @%#x: BID %#x, want %#x", ib, le.Uint64(tr[trailerBIDOff:]), bid)
 	}
 	p.level = int(p.buf[btLevelOff])
 	if level >= 0 && p.level != level {
@@ -164,7 +170,8 @@ func (t *btree) each(fn func(e []byte)) {
 	rec(t.root)
 }
 
-// find returns the leaf page and slot of key (nil if absent).
+// find returns the leaf page and slot of key (nil if absent). In an intermediate page it follows the last entry whose btkey is
+// <= key.
 func (t *btree) find(key uint64) (*btPage, int) {
 	p := t.root
 	for p.level > 0 {
@@ -244,7 +251,7 @@ func (f *File) flush(t *btree, zeroDead bool) error {
 				}
 			}
 		case p.dirty:
-			le.PutUint32(p.buf[500:], pstCRC(p.buf[:pageTrailerOff]))
+			le.PutUint32(p.buf[pageTrailerOff+trailerCRCOff:], pstCRC(p.buf[:pageTrailerOff]))
 			if _, err := f.f.WriteAt(p.buf[:], int64(p.ib)); err != nil {
 				return err
 			}
@@ -274,6 +281,7 @@ func (f *File) nbtEntries() []nbtEntry {
 	return out
 }
 
+// decodeNBT decodes an NBTENTRY {nid (8 bytes), bidData, bidSub, nidParent}.
 func decodeNBT(e []byte) nbtEntry {
 	return nbtEntry{nid: le.Uint32(e), data: le.Uint64(e[8:]), sub: le.Uint64(e[16:]), parent: le.Uint32(e[24:])}
 }
@@ -286,11 +294,13 @@ func (f *File) node(nid uint32) (nbtEntry, bool) {
 	return decodeNBT(p.buf[i*nbtEntSize:]), true
 }
 
+// blockRef locates a block: its offset and cb, the data size from its BBTENTRY ([MS-PST] 2.2.2.7.7.3).
 type blockRef struct {
 	ib uint64
 	cb int
 }
 
+// total is the on-disk size: data, padding and BLOCKTRAILER, rounded up to a multiple of 64 bytes ([MS-PST] 2.2.2.8.2).
 func (r blockRef) total() uint64 {
 	return uint64(r.cb+blockTrailerSize+blockAlign-1) &^ (blockAlign - 1)
 }
@@ -304,7 +314,7 @@ func (f *File) blockRef(bid uint64) (blockRef, error) {
 	return blockRef{ib: le.Uint64(e[8:]), cb: int(le.Uint16(e[16:]))}, nil
 }
 
-// rawBlock reads and verifies a block, returning its on-disk (still encrypted) contents.
+// rawBlock reads and verifies a block (BLOCKTRAILER cb, bid and dwCRC, [MS-PST] 2.2.2.8.1), returning its on-disk (still encrypted) contents.
 func (f *File) rawBlock(bid uint64) ([]byte, error) {
 	r, err := f.blockRef(bid)
 	if err != nil {
@@ -319,9 +329,9 @@ func (f *File) rawBlock(bid uint64) ([]byte, error) {
 	}
 	t := buf[len(buf)-blockTrailerSize:]
 	switch {
-	case int(le.Uint16(t)) != r.cb || le.Uint64(t[8:]) != bid:
+	case int(le.Uint16(t)) != r.cb || le.Uint64(t[trailerBIDOff:]) != bid:
 		return nil, fmt.Errorf("block %#x @%#x: bad trailer", bid, r.ib)
-	case pstCRC(buf[:r.cb]) != le.Uint32(t[4:]):
+	case pstCRC(buf[:r.cb]) != le.Uint32(t[trailerCRCOff:]):
 		return nil, fmt.Errorf("block %#x @%#x: CRC mismatch", bid, r.ib)
 	}
 	return buf[:r.cb], nil
@@ -342,7 +352,7 @@ func (f *File) readBlock(bid uint64) ([]byte, error) {
 	return b, nil
 }
 
-// dataBlocks returns the plain data blocks of a data tree.
+// dataBlocks returns the plain data blocks of a data tree: one data block, or those under an XBLOCK / XXBLOCK ([MS-PST] 2.2.2.8.3.2).
 func (f *File) dataBlocks(bid uint64) ([][]byte, error) {
 	if bid == 0 {
 		return nil, nil
@@ -451,6 +461,7 @@ func (f *File) walkSub(bid uint64, visit func(uint64)) error {
 	return nil
 }
 
+// walkNode visits the BIDs of every block of a node: its data tree and its subnode tree.
 func (f *File) walkNode(e nbtEntry, visit func(uint64)) error {
 	if err := f.walkData(e.data, visit); err != nil {
 		return err
@@ -459,7 +470,8 @@ func (f *File) walkNode(e nbtEntry, visit func(uint64)) error {
 }
 
 // writeBlock rewrites an existing block in place with new plain contents (cb may shrink) and updates its BBT entry.
-// The BID, and so the key for encryption, stays the same.
+// The BID, and so the key for encryption, stays the same ([MS-PST] 5.2). The BLOCKTRAILER gets the new cb and dwCRC;
+// wSig depends only on the offset and BID ([MS-PST] 5.5), which do not change.
 func (f *File) writeBlock(bid uint64, data []byte) error {
 	r, err := f.blockRef(bid)
 	if err != nil {

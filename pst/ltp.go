@@ -51,7 +51,7 @@ const (
 	fillLevelFull = 0xF
 )
 
-// Prop is one property of a PC. Data is the raw value bytes (fixed-length values are LE, strings are UTF-16LE).
+// Prop is one property of a PC ([MS-PST] 2.3.3 Property Context). Data is the raw value bytes (fixed-length values are LE, strings are UTF-16LE).
 type Prop struct {
 	ID, Type uint16
 	Data     []byte
@@ -107,7 +107,8 @@ func utf16Slow(s string) []byte {
 
 // ---- subnode context ----
 
-// subCtx collects the subnodes of one node.
+// subCtx collects the subnodes of one node ([MS-PST] 2.2.2.8.3.3 Subnode BTree). A PC value or a TC row matrix that does not
+// fit a heap item is stored here and referenced by its local NID ([MS-PST] 2.3.3.2 HNID).
 type subCtx struct {
 	w    *Writer
 	subs []Sub
@@ -146,6 +147,7 @@ type hblock struct {
 	offs []uint16
 }
 
+// heap builds a Heap-on-Node ([MS-PST] 2.3.1): a series of heap items, each data block ending with an HNPAGEMAP.
 type heap struct {
 	sig    byte
 	blocks []*hblock
@@ -171,7 +173,9 @@ func (h *heap) newBlock() *hblock {
 	return b
 }
 
-// allocBuf allocates an n-byte heap item and returns its HID and a slice to write into.
+// allocBuf allocates an n-byte heap item and returns its HID ([MS-PST] 2.3.1.1) and a slice to write into.
+// A new block is started when the HNPAGEMAP ([MS-PST] 2.3.1.5) would no longer fit after the item: a pad byte (2-byte alignment),
+// cAlloc and cFree (4 bytes) and cAlloc+1 offsets of 2 bytes each.
 func (h *heap) allocBuf(n int) (uint32, []byte) {
 	if n > maxHeapItem {
 		panic("heap item too large")
@@ -200,7 +204,8 @@ func fillLevel(free int) byte {
 	return fillLevelFull
 }
 
-// finish finalizes the HNPAGEMAP and header and returns the NDB block sequence.
+// finish finalizes the HNPAGEMAP ([MS-PST] 2.3.1.5) and header and returns the NDB block sequence.
+// userRoot is HNHDR.hidUserRoot: the BTHHEADER of a PC or the TCINFO of a TC.
 func (h *heap) finish(userRoot uint32) [][]byte {
 	levels := make([]byte, len(h.blocks))
 	out := make([][]byte, len(h.blocks))
@@ -247,7 +252,7 @@ const (
 	bthHIDSize   = 4 // size of the child HID in an intermediate record
 )
 
-// bth builds a BTH from recs (concatenated fixed-length records in ascending key order) and fills hdr (BTHHEADER).
+// bth builds a BTree-on-Heap ([MS-PST] 2.3.2) from recs (concatenated fixed-length records in ascending key order) and fills hdr (BTHHEADER).
 func (h *heap) bth(hdr []byte, cbKey, cbEnt int, recs []byte) {
 	rs := cbKey + cbEnt
 	n := len(recs) / rs
@@ -289,6 +294,7 @@ func (h *heap) bth(hdr []byte, cbKey, cbEnt int, recs []byte) {
 
 // ---- Property Context ----
 
+// inlineType reports whether a PC value of type t always fits the 4-byte dwValueHnid ([MS-PST] 2.3.3.3).
 func inlineType(t uint16) bool {
 	switch t {
 	case PtShort, PtLong, PtFloat, PtBool, PtError, PtNull:
@@ -305,7 +311,7 @@ const (
 	pcRecSize = pcKeySize + pcEntSize
 )
 
-// buildPC returns the NDB block sequence of a Property Context. Large values are moved out to subnodes of sc.
+// buildPC returns the NDB block sequence of a Property Context ([MS-PST] 2.3.3). Large values are moved out to subnodes of sc.
 func buildPC(props []Prop, sc *subCtx) [][]byte {
 	sort.Slice(props, func(i, j int) bool { return props[i].ID < props[j].ID })
 	h := newHeap(clientSigPC)
@@ -351,6 +357,8 @@ type Row struct {
 	Cells []Cell
 }
 
+// cellSize is the size of a column's slot in a TC row: the value itself for fixed types up to 8 bytes, otherwise a 4-byte HNID
+// ([MS-PST] 2.3.4.4.2 Variable-sized Data).
 func cellSize(t uint16) int {
 	switch t {
 	case PtI8, PtTime, PtDouble, PtCurrency:
@@ -363,6 +371,7 @@ func cellSize(t uint16) int {
 	return 4
 }
 
+// isVar reports whether a value of type t is stored out of the row and referenced by an HNID ([MS-PST] 2.3.4.4.2).
 func isVar(t uint16) bool {
 	switch t {
 	case PtLong, PtFloat, PtError, PtI8, PtTime, PtDouble, PtCurrency, PtShort, PtBool:
@@ -406,7 +415,7 @@ const (
 	cebFixedBits = 0xC0 // CEB bits 0 and 1 (RowID, RowVer) are always set; bit n is bit 7-n%8 of CEB byte n/8
 )
 
-// buildTC builds a Table Context. cols is in iBit order (iBit 0/1 are fixed as RowID/RowVer).
+// buildTC builds a Table Context ([MS-PST] 2.3.4). cols is in iBit order (iBit 0/1 are fixed as RowID/RowVer).
 // TCOLDESC entries are sorted by tag ascending; in-row offsets are assigned in iBit order: 4/8-byte groups, then 2, then 1-byte groups, then CEB.
 func buildTC(cols []ColDef, rows []Row, sc *subCtx) [][]byte {
 	type col struct {
@@ -507,7 +516,7 @@ func buildTC(cols []ColDef, rows []Row, sc *subCtx) [][]byte {
 		copy(b, rowBuf)
 		rowsHnid = hid
 	default:
-		per := blockMax / rowSize * rowSize
+		per := blockMax / rowSize * rowSize // each data block holds whole rows only ([MS-PST] 2.3.4.4 Row Matrix)
 		var chunks [][]byte
 		for p := 0; p < len(rowBuf); p += per {
 			chunks = append(chunks, rowBuf[p:min(len(rowBuf), p+per)])
