@@ -70,15 +70,15 @@ func nameToIDNode(sc *subCtx) [][]byte {
 		tags = append(tags, b.tag)
 	}
 	for _, n := range addedNames {
-		wGuid := uint16(n.guid+3) << 1
+		wGUID := uint16(n.guid+3) << 1
 		var rec [8]byte
 		le.PutUint32(rec[0:], n.lid)
-		le.PutUint16(rec[4:], wGuid)
+		le.PutUint16(rec[4:], wGUID)
 		le.PutUint16(rec[6:], n.id-0x8000)
 		entries = append(entries, rec[:]...)
 		// Bucket = (dwPropertyID ^ low 16 bits of the second DWORD of the NAMEID) % bucket count ([MS-PST] 2.4.7.5). For a numeric
 		// name the bucket record is the NAMEID itself.
-		tag := uint16(0x1000 + (n.lid^uint32(wGuid))%nameIDBuckets)
+		tag := uint16(0x1000 + (n.lid^uint32(wGUID))%nameIDBuckets)
 		if _, ok := buckets[tag]; !ok {
 			tags = append(tags, tag)
 		}

@@ -3,6 +3,7 @@ package pst
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -58,5 +59,19 @@ func TestCountItemsNested(t *testing.T) {
 	}
 	if want := []FolderCount{{"Inbox/MyFav", 3}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v want %+v", got, want)
+	}
+}
+
+func TestCountItemsErrors(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := CountItems(filepath.Join(dir, "missing.pst")); err == nil {
+		t.Error("missing file: expected error")
+	}
+	bad := filepath.Join(dir, "bad.pst")
+	if err := os.WriteFile(bad, bytes.Repeat([]byte("x"), 1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CountItems(bad); err == nil {
+		t.Error("non-PST file: expected error")
 	}
 }

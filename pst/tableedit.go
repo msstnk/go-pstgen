@@ -398,11 +398,20 @@ func (f *File) clearTableCell(e nbtEntry, rowID uint32, tag, typ uint16) error {
 	exists := func(row []byte) bool { return row[cebOff]&(0x80>>(ibit%8)) != 0 }
 	if t.rowsHnid&nidTypeMask == 0 {
 		pg := int(t.rowsHnid >> 16)
-		s, _, err := hnRange(t.h.pages[pg], t.rowsHnid)
+		if pg >= len(t.h.pages) {
+			return fmt.Errorf("row matrix HNID %#x: no such heap page", t.rowsHnid)
+		}
+		s, end, err := hnRange(t.h.pages[pg], t.rowsHnid)
 		if err != nil {
 			return err
 		}
+		if s+(idx+1)*t.rowSize > end {
+			return fmt.Errorf("row %d lies outside the row matrix", idx)
+		}
 		row := t.h.pages[pg][s+idx*t.rowSize : s+(idx+1)*t.rowSize]
+		if err := checkCell(row, cebOff, ibData, cb); err != nil {
+			return err
+		}
 		if exists(row) && clearBytes(row[ibData:ibData+cb]) {
 			f.saveHeap(t.h)
 		}
@@ -417,9 +426,23 @@ func (f *File) clearTableCell(e nbtEntry, rowID uint32, tag, typ uint16) error {
 	if err != nil {
 		return err
 	}
+	if (idx%per+1)*t.rowSize > len(d) {
+		return fmt.Errorf("row %d lies outside its row matrix block", idx)
+	}
 	row := d[(idx%per)*t.rowSize : (idx%per+1)*t.rowSize]
+	if err := checkCell(row, cebOff, ibData, cb); err != nil {
+		return err
+	}
 	if exists(row) && clearBytes(row[ibData:ibData+cb]) {
 		f.stage(m.kids[idx/per], d)
+	}
+	return nil
+}
+
+// checkCell verifies that the cell [ibData, ibData+cb) and the existence-bit byte at cebOff lie inside the row.
+func checkCell(row []byte, cebOff, ibData, cb int) error {
+	if cebOff < 0 || cebOff >= len(row) || ibData < 0 || ibData+cb > len(row) {
+		return fmt.Errorf("bad column layout for a %d-byte row", len(row))
 	}
 	return nil
 }

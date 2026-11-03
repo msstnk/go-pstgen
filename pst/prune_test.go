@@ -1,6 +1,7 @@
 package pst
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -196,5 +197,20 @@ func TestPruneLargeHierarchy(t *testing.T) {
 			}
 		}
 		f.close()
+	}
+}
+
+func TestPruneErrors(t *testing.T) {
+	dir := t.TempDir()
+	opt := PruneOptions{Paths: []string{"Inbox"}, DryRun: true}
+	if _, err := Prune(filepath.Join(dir, "missing.pst"), opt); err == nil {
+		t.Error("missing file: expected error")
+	}
+	bad := filepath.Join(dir, "bad.pst")
+	if err := os.WriteFile(bad, bytes.Repeat([]byte("x"), 1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prune(bad, opt); err == nil {
+		t.Error("non-PST file: expected error")
 	}
 }

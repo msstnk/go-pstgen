@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +27,7 @@ const (
 )
 
 // generate writes one mailbox (split across several PST files if needed) and returns the paths of the files written.
-func generate(cfg config.Config, c *corpus, j job) ([]string, error) {
+func generate(cfg config.Config, c *corpus, j job) (files []string, err error) {
 	rng := rand.New(rand.NewSource(j.seed))
 	tag := "[" + j.user + "]"
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
@@ -49,11 +50,25 @@ func generate(cfg config.Config, c *corpus, j job) ([]string, error) {
 		folders map[string]*pst.Folder
 		written []string
 	)
+	// A failed mailbox leaves no files behind: its finished parts are not listed anywhere, and an unfinished one is invalid.
+	defer func() {
+		if err == nil {
+			return
+		}
+		if s != nil {
+			s.Abort()
+		}
+		for _, p := range written {
+			os.Remove(p)
+		}
+		files = nil
+	}()
 	open := func() error {
 		part++
 		inPart = 0
 		path = outPath(cfg, j.user, part)
 		var err error
+		s = nil
 		if s, err = pst.Create(path, j.user, key[:], 4<<20, cfg.Crypt); err != nil {
 			return err
 		}
@@ -80,7 +95,6 @@ func generate(cfg config.Config, c *corpus, j job) ([]string, error) {
 	}
 	finish := func() error {
 		if err := s.Close(); err != nil {
-			s.Abort()
 			return err
 		}
 		st, err := os.Stat(path)
@@ -136,15 +150,24 @@ func sanitize(s string) string {
 	return s
 }
 
-// checkDuplicates rejects mailboxes whose output file names collide (case-insensitively, after sanitizing).
+// checkDuplicates rejects mailboxes whose output file names collide (case-insensitively, after sanitizing),
+// including a name that equals another one plus a split suffix ("x" and "x-2": x's part 2 would be x-2.pst).
 func checkDuplicates(mailboxes []string) error {
+	names := make([]string, len(mailboxes))
 	seen := map[string]bool{}
-	for _, u := range mailboxes {
+	for i, u := range mailboxes {
 		d := strings.ToLower(sanitize(u))
 		if seen[d] {
 			return fmt.Errorf("duplicate mailbox in list: %s", u)
 		}
-		seen[d] = true
+		seen[d], names[i] = true, d
+	}
+	for i, d := range names {
+		if k := strings.LastIndexByte(d, '-'); k > 0 {
+			if n, err := strconv.Atoi(d[k+1:]); err == nil && n >= 2 && strconv.Itoa(n) == d[k+1:] && seen[d[:k]] {
+				return fmt.Errorf("mailbox %s collides with the split files of %s", mailboxes[i], d[:k])
+			}
+		}
 	}
 	return nil
 }

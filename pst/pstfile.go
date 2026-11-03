@@ -314,7 +314,11 @@ func (f *File) blockRef(bid uint64) (blockRef, error) {
 		return blockRef{}, fmt.Errorf("BID %#x not in BBT", bid)
 	}
 	e := p.buf[i*bbtEntSize:]
-	return blockRef{ib: le.Uint64(e[8:]), cb: int(le.Uint16(e[16:]))}, nil
+	r := blockRef{ib: le.Uint64(e[8:]), cb: int(le.Uint16(e[16:]))}
+	if r.cb > blockMax {
+		return blockRef{}, fmt.Errorf("block %#x: cb %d too large", bid, r.cb)
+	}
+	return r, nil
 }
 
 // rawBlock reads and verifies a block (BLOCKTRAILER cb, bid and dwCRC, [MS-PST] 2.2.2.8.1), returning its on-disk (still encrypted) contents.
@@ -322,9 +326,6 @@ func (f *File) rawBlock(bid uint64) ([]byte, error) {
 	r, err := f.blockRef(bid)
 	if err != nil {
 		return nil, err
-	}
-	if r.cb > blockMax {
-		return nil, fmt.Errorf("block %#x: cb %d too large", bid, r.cb)
 	}
 	buf := make([]byte, r.total())
 	if _, err := f.f.ReadAt(buf, int64(r.ib)); err != nil {
@@ -355,10 +356,24 @@ func (f *File) readBlock(bid uint64) ([]byte, error) {
 	return b, nil
 }
 
+// maxTreeDepth bounds the recursion into the internal blocks of a data tree (XXBLOCK > XBLOCK > data) and of a
+// subnode tree (SIBLOCK > SLBLOCK > subnode trees). A file whose internal blocks refer back to themselves is rejected
+// instead of recursing forever.
+const maxTreeDepth = 8
+
+func errTreeDepth(bid uint64) error {
+	return fmt.Errorf("block %#x: block tree too deep (cyclic?)", bid)
+}
+
 // dataBlocks returns the plain data blocks of a data tree: one data block, or those under an XBLOCK / XXBLOCK ([MS-PST] 2.2.2.8.3.2).
-func (f *File) dataBlocks(bid uint64) ([][]byte, error) {
+func (f *File) dataBlocks(bid uint64) ([][]byte, error) { return f.dataBlocksAt(bid, 0) }
+
+func (f *File) dataBlocksAt(bid uint64, depth int) ([][]byte, error) {
 	if bid == 0 {
 		return nil, nil
+	}
+	if depth > maxTreeDepth {
+		return nil, errTreeDepth(bid)
 	}
 	if bid&bidInternal == 0 {
 		b, err := f.readBlock(bid)
@@ -374,7 +389,7 @@ func (f *File) dataBlocks(bid uint64) ([][]byte, error) {
 	}
 	var out [][]byte
 	for _, k := range kids {
-		bs, err := f.dataBlocks(k)
+		bs, err := f.dataBlocksAt(k, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -400,9 +415,14 @@ func xblockKids(bid uint64, b []byte) ([]uint64, error) {
 }
 
 // walkData calls visit for every block of a data tree. Only internal blocks are read.
-func (f *File) walkData(bid uint64, visit func(uint64)) error {
+func (f *File) walkData(bid uint64, visit func(uint64)) error { return f.walkDataAt(bid, 0, visit) }
+
+func (f *File) walkDataAt(bid uint64, depth int, visit func(uint64)) error {
 	if bid == 0 {
 		return nil
+	}
+	if depth > maxTreeDepth {
+		return errTreeDepth(bid)
 	}
 	visit(bid)
 	if bid&bidInternal == 0 {
@@ -417,7 +437,7 @@ func (f *File) walkData(bid uint64, visit func(uint64)) error {
 		return err
 	}
 	for _, k := range kids {
-		if err := f.walkData(k, visit); err != nil {
+		if err := f.walkDataAt(k, depth+1, visit); err != nil {
 			return err
 		}
 	}
@@ -425,9 +445,14 @@ func (f *File) walkData(bid uint64, visit func(uint64)) error {
 }
 
 // walkSub calls visit for every block of a subnode tree, including the data and subnode trees of the subnodes.
-func (f *File) walkSub(bid uint64, visit func(uint64)) error {
+func (f *File) walkSub(bid uint64, visit func(uint64)) error { return f.walkSubAt(bid, 0, visit) }
+
+func (f *File) walkSubAt(bid uint64, depth int, visit func(uint64)) error {
 	if bid == 0 {
 		return nil
+	}
+	if depth > maxTreeDepth {
+		return errTreeDepth(bid)
 	}
 	visit(bid)
 	b, err := f.rawBlock(bid)
@@ -444,10 +469,10 @@ func (f *File) walkSub(bid uint64, visit func(uint64)) error {
 		}
 		for i := 0; i < n; i++ {
 			e := b[internalHdrSize+slEntSize*i:]
-			if err := f.walkData(le.Uint64(e[8:]), visit); err != nil {
+			if err := f.walkDataAt(le.Uint64(e[8:]), depth+1, visit); err != nil {
 				return err
 			}
-			if err := f.walkSub(le.Uint64(e[16:]), visit); err != nil {
+			if err := f.walkSubAt(le.Uint64(e[16:]), depth+1, visit); err != nil {
 				return err
 			}
 		}
@@ -457,7 +482,7 @@ func (f *File) walkSub(bid uint64, visit func(uint64)) error {
 		return fmt.Errorf("block %#x: truncated SIBLOCK", bid)
 	}
 	for i := 0; i < n; i++ {
-		if err := f.walkSub(le.Uint64(b[internalHdrSize+siEntSize*i+bidSize:]), visit); err != nil {
+		if err := f.walkSubAt(le.Uint64(b[internalHdrSize+siEntSize*i+bidSize:]), depth+1, visit); err != nil {
 			return err
 		}
 	}

@@ -75,3 +75,25 @@ func TestChunkPadding(t *testing.T) {
 		t.Fatalf("expected XBLOCK, got bid %#x", x.bid)
 	}
 }
+
+func TestCreateErrors(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Create(filepath.Join(dir, "no", "such", "dir.pst"), "x", nil, 4096, CryptNone); err == nil {
+		t.Error("unwritable path: expected error")
+	}
+	if _, err := NewWriter(filepath.Join(dir, "x.pst"), 4096, CryptCyclic+1); err == nil {
+		t.Error("unknown crypt method: expected error")
+	}
+}
+
+func TestAbortRemovesFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "partial.pst")
+	w, err := NewWriter(p, 4096, CryptNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Abort()
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Errorf("aborted file still exists: %v", err)
+	}
+}
