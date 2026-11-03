@@ -103,9 +103,6 @@ func (f *File) clearPCValue(nid uint32, tag uint16) error {
 	if err != nil || !ok {
 		return err
 	}
-	if le.Uint32(h.pages[pg][off+4:]) == 0 {
-		return nil
-	}
 	le.PutUint32(h.pages[pg][off+4:], 0)
 	f.saveHeap(h)
 	return nil
@@ -174,11 +171,11 @@ func (f *File) loadTable(e nbtEntry) (*tableInfo, error) {
 	if t.info, err = hn.alloc(t.infoHid); err != nil || len(t.info) < tcInfoHdrSize || t.info[0] != clientSigTC {
 		return nil, fmt.Errorf("bad TCINFO")
 	}
-	t.rowSize = int(le.Uint16(t.info[8:]))
+	t.rowSize = int(le.Uint16(t.info[tcRgibOff+2*tciBM:]))
 	if t.rowSize == 0 || t.rowSize > blockMax {
 		return nil, fmt.Errorf("bad row size %d", t.rowSize)
 	}
-	t.idxHid, t.rowsHnid = le.Uint32(t.info[10:]), le.Uint32(t.info[14:])
+	t.idxHid, t.rowsHnid = le.Uint32(t.info[tcRowIndexOff:]), le.Uint32(t.info[tcRowsOff:])
 	bth, err := hn.alloc(t.idxHid)
 	if err != nil || len(bth) < 8 || bth[0] != clientSigBTH || bth[1] != rowIdxKeySize || bth[2] != rowIdxEntSize {
 		return nil, fmt.Errorf("bad row index BTH")
@@ -332,7 +329,7 @@ func (f *File) removeTableRows(e nbtEntry, ids map[uint32]bool) (removed int, dr
 	}
 	if left == 0 { // an empty table has no row matrix and no BTH root
 		s, _, _ := hnRange(t.h.pages[t.infoHid>>16], t.infoHid)
-		le.PutUint32(t.h.pages[t.infoHid>>16][s+14:], 0)
+		le.PutUint32(t.h.pages[t.infoHid>>16][s+tcRowsOff:], 0)
 		s, _, _ = hnRange(t.h.pages[t.idxHid>>16], t.idxHid)
 		le.PutUint32(t.h.pages[t.idxHid>>16][s+4:], 0)
 	}

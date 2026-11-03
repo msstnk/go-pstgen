@@ -31,23 +31,41 @@ func sampleMeeting(rng *rand.Rand, cfg config.Config) (start time.Time, dur time
 	day0 := lo.Truncate(fullDay)
 	days := int(hi.Truncate(fullDay).Sub(day0)/(fullDay)) + 1
 
-	for range 1000 {
-		r := rng.Float64() * 10
-		dur = meetingLengths[len(meetingLengths)-1].d
-		for _, l := range meetingLengths {
-			if r < l.w {
-				dur = l.d
-				break
-			}
-			r -= l.w
+	r := rng.Float64() * 10
+	dur = meetingLengths[len(meetingLengths)-1].d
+	for _, l := range meetingLengths {
+		if r < l.w {
+			dur = l.d
+			break
 		}
-		day := day0.Add(time.Duration(rng.Intn(days)) * fullDay)
-		start = day.Add(time.Duration(firstSlot+rng.Intn(lastSlot-firstSlot+1)) * slot)
-		if start.Before(lo) || start.After(hi) || start.Add(dur).After(day.Add(fullDay)) {
-			continue
-		}
-		break
+		r -= l.w
 	}
+
+	// The slots of a day that keep the meeting inside [lo, hi] and inside that day. Only the first and last
+	// day can be cut short, or even left empty, so trim those and every remaining day has a valid slot.
+	slotsPerDay := int(fullDay / slot)
+	slots := func(day time.Time) (a, b int) {
+		a, b = firstSlot, min(lastSlot, slotsPerDay-int(dur/slot))
+		if d := lo.Sub(day); d > 0 {
+			a = max(a, int((d+slot-1)/slot))
+		}
+		if d := hi.Sub(day); d < 0 {
+			b = -1
+		} else {
+			b = min(b, int(d/slot))
+		}
+		return a, b
+	}
+	for a, b := slots(day0); a > b; a, b = slots(day0) {
+		day0 = day0.Add(fullDay)
+		days--
+	}
+	for a, b := slots(day0.Add(time.Duration(days-1) * fullDay)); a > b; a, b = slots(day0.Add(time.Duration(days-1) * fullDay)) {
+		days--
+	}
+	day := day0.Add(time.Duration(rng.Intn(days)) * fullDay)
+	a, b := slots(day)
+	start = day.Add(time.Duration(a+rng.Intn(b-a+1)) * slot)
 	ref := start
 	if ref.After(cfg.End) {
 		ref = cfg.End

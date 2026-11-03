@@ -67,11 +67,7 @@ func generate(cfg config.Config, c *corpus, j job) ([]string, error) {
 			case name == "Deleted Items":
 				folders[name] = s.Deleted
 			case hasParent:
-				pf, ok := folders[parent]
-				if !ok {
-					return fmt.Errorf("parent folder %q of %q must come before it in folderNames", parent, name)
-				}
-				folders[name] = s.AddPlainFolder(pf, name)
+				folders[name] = s.AddPlainFolder(folders[parent], name)
 			case name == calendarFolder:
 				folders[name] = s.AddCalendarFolder(s.Top, name)
 			case name == recoverableRoot:

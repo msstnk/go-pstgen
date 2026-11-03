@@ -8,7 +8,6 @@ import (
 
 // NID types ([MS-PST] 2.2.2.1, NID_TYPE) and the fixed NIDs ([MS-PST] 2.4.1)
 const (
-	nidInternal       = 0x01 // NID_TYPE_INTERNAL
 	nidFolder         = 0x02 // NID_TYPE_NORMAL_FOLDER
 	nidSearchFolder   = 0x03 // NID_TYPE_SEARCH_FOLDER
 	nidMessage        = 0x04 // NID_TYPE_NORMAL_MESSAGE
@@ -18,8 +17,6 @@ const (
 	nidContents       = 0x0E // NID_TYPE_CONTENTS_TABLE
 	nidAssoc          = 0x0F // NID_TYPE_ASSOC_CONTENTS_TABLE
 	nidSearchContents = 0x10 // NID_TYPE_SEARCH_CONTENTS_TABLE
-	nidAttachTbl      = 0x11 // NID_TYPE_ATTACHMENT_TABLE
-	nidRecipTbl       = 0x12 // NID_TYPE_RECIPIENT_TABLE
 	nidLTP            = 0x1F // NID_TYPE_LTP
 
 	nidTypeBits = 5    // an NID is nidIndex<<nidTypeBits | nidType ([MS-PST] 2.2.2.1)
@@ -379,7 +376,7 @@ const (
 func (s *Store) EstimatedSize() int64 {
 	w := s.w
 	blocks := int64(len(w.bbt)) + s.rowSize/8192
-	pages := (int64(len(w.nbt))/15 + blocks/20 + 2) * 16 / 15 // add 1/15 for the upper levels
+	pages := (int64(len(w.nbt))/nbtMaxEnt + blocks/bbtMaxEnt + 2) * 16 / 15 // add 1/15 for the upper levels
 	return int64(w.off) + s.rowSize + pages*pageSize + 64<<10
 }
 

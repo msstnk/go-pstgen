@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/msstnk/go-pstgen/internal/buildinfo"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +36,7 @@ func main() {
 	}
 	flag.Parse()
 	if *showVersion {
-		fmt.Println("go-pstprune", versionString())
+		fmt.Println("go-pstprune", buildinfo.String(version))
 		return
 	}
 	// An unquoted glob is expanded by the shell, so the files after the first one arrive as positional arguments.

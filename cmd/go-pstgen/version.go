@@ -6,5 +6,3 @@ import "github.com/msstnk/go-pstgen/internal/buildinfo"
 const version = "v0.1.7"
 
 var credit = buildinfo.Credit("go-pstgen", version, "dummy PST file generator")
-
-func versionString() string { return buildinfo.String(version) }

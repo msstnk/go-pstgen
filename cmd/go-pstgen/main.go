@@ -6,6 +6,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/msstnk/go-pstgen/internal/buildinfo"
 	"os"
 
 	"github.com/msstnk/go-pstgen/internal/config"
@@ -23,7 +24,7 @@ func main() {
 	}
 	flag.Parse()
 	if *showVersion {
-		fmt.Println("go-pstgen", versionString())
+		fmt.Println("go-pstgen", buildinfo.String(version))
 		return
 	}
 	if *initConfig {
