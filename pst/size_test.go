@@ -2,6 +2,7 @@ package pst
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -69,5 +70,29 @@ func TestBodyPrefixAndConversationID(t *testing.T) {
 	}
 	if a, b := conversationID("Hello"), conversationID("HELLO"); len(a) != 16 || !bytes.Equal(a, b) {
 		t.Error("the conversation ID is 16 bytes and ignores case")
+	}
+}
+
+// A message PC whose heap spans several blocks: PidTagMessageSize counts the padded blocks, as the BBT cb values do.
+func TestBuildPCSizedMultiBlockHeap(t *testing.T) {
+	w, err := NewWriter(filepath.Join(t.TempDir(), "pc.pst"), 4096, CryptNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Abort()
+	var props []Prop
+	for i := range 8 {
+		props = append(props, PStr(uint16(0x6000+i), strings.Repeat("x", 1500))) // 3000 bytes: inline, below maxHeapItem
+	}
+	props = append(props, PInt32(0x0E08, 0))
+	var got int32
+	chunks := buildPCSized(props, newSubCtx(w), 0x0E08, func(heap int) int32 { got = int32(heap); return got })
+	if len(chunks) < 2 {
+		t.Fatalf("heap is %d block(s), want several", len(chunks))
+	}
+	start := w.dataBytes
+	w.putChunks(chunks)
+	if want := int32(w.dataBytes - start); got != want {
+		t.Errorf("size passed %d, data blocks written total %d", got, want)
 	}
 }
