@@ -34,7 +34,7 @@ The repository also ships a second tool, [`go-pstprune`](#go-pstprune), which cu
 
 ## Install
 
-All you need is Go 1.26 or later (`go.mod` requires `go 1.26.0`). No CGO. Install straight from GitHub, no clone required:
+All you need is Go 1.26 or later. No CGO. Install straight from GitHub, no clone required:
 
 ```sh
 go install github.com/msstnk/go-pstgen/cmd/go-pstgen@latest
@@ -47,7 +47,7 @@ The binaries land in `$(go env GOPATH)/bin` (or `$GOBIN` if set).
 
 ## Build
 
-Or build from a clone (Go 1.26 or later), one line per platform:
+Or build from a clone, one line per platform:
 
 ```sh
 # Linux
@@ -100,8 +100,10 @@ Exit codes: `0` on success, `2` for a usage error (bad flags or arguments), `1` 
 After generating, `go-pstgen` reads every PST it wrote back and writes the number of messages per folder, one `file<TAB>folder<TAB>count` line per folder (same format as `go-pstprune --count-items`). A mailbox split into `<UPN>-2.pst`, ... gets lines for each part. Folders without messages are left out, and a parent does not include its subfolders' messages.
 
 ```
-output/user01@example.com.pst	Inbox	1100
-output/user01@example.com-2.pst	Sent Items	1212
+output/user01@example.com.pst	Inbox	1309
+output/user01@example.com.pst	Sent Items	332
+output/user01@example.com-2.pst	Inbox	1215
+output/user01@example.com-2.pst	Sent Items	212
 ```
 
 If the summary file already exists, `go-pstgen` stops with an error **before** generating anything and never overwrites it. Delete or rename it, or pick another name with `--summary`. If some mailboxes fail, the summary still lists the PSTs that were written and the exit code is 1.
